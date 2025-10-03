@@ -462,19 +462,18 @@ class Dropdown {
     this.container.setAttribute('data-bs-auto-close', 'outside');
 
     // Erzeuge/halte die Dropdown-Instanz (einmal!)
-    // eslint-disable-next-line no-undef
-    if (bootstrap.Dropdown.getOrCreateInstance) {           // Bootstrap 5
-      this.dd = bootstrap.Dropdown.getOrCreateInstance(this.toggle, {
+    const wbs = window.bootstrap ?? window.bs4;
+    if (wbs?.Dropdown?.getOrCreateInstance) {           // Bootstrap 5+
+      this.dd = wbs.Dropdown.getOrCreateInstance(this.toggle, {
         autoClose: false,
         reference: 'toggle',
         popperConfig: { placement: 'bottom-start' }
       });
-    } else {                                                // Bootstrap 4
-      this.dd = $(this.toggle).data('bs.dropdown');
+    } else if (wbs?.Dropdown) {                         // Bootstrap 4.x fallback
+      this.dd = $(this.toggle).data('bs.dropdown') ?? wbs.Dropdown.getInstance?.(this.toggle);
       if (!this.dd) {
-        const bs = window.bootstrap || window.bs4;
-        this.dd = bs.Dropdown(this.toggle, {
-          boundary: 'viewport',   // Beispiel für BS4-Optionen
+        this.dd = new wbs.Dropdown(this.toggle, {
+          boundary: 'viewport',   // Position sauber
           reference: 'toggle'
         });
         $(this.toggle).data('bs.dropdown', this.dd);
@@ -483,6 +482,8 @@ class Dropdown {
       $(this.container).on('hide.bs.dropdown', e => {
         if (this.options.bootstrapAutoClose === false) e.preventDefault();
       });
+    } else {
+      console.warn('Bootstrap Dropdown nicht verfügbar.');
     }
 
     if (this.options.listjs) {
