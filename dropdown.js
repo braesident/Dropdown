@@ -7,6 +7,7 @@ class Dropdown {
     floatingbox: false,
     items: {},
     listjs: false,
+    filter: true,
     menumaxheight: '300px',
     menustyle: '',
     placeholder: '',
@@ -40,6 +41,10 @@ class Dropdown {
     item: '<li>Entry</li>',
     valueNames: []
   };
+
+  toggleLabel = null;
+  hiddenInput = null;
+  valueKey = null;
 
   #itemsRendered = true;
 
@@ -105,6 +110,8 @@ class Dropdown {
     this.container = document.getElementById(elementselector);
 
     this.options = this.#merge(this.options, options);
+    this.options.filter = this.options.filter !== false;
+    this.valueKey = this.options.valueKey ?? this.#detectValueKey();
     this.items = this.options.items;
 
     this._ns = `.exudd-${this.id}`;
@@ -143,6 +150,7 @@ class Dropdown {
     if (this.options.listjs && this.#listjs) {
     // List.js-Variante
       try { this.#listjs.clear(); } catch { /* empty */ }
+      this.items = {};
     } else {
     // Native-Variante
       this.items = {};
@@ -162,7 +170,11 @@ class Dropdown {
 
       // Sichtbares Input ggf. leeren oder via onReplaceText(null) den alten Zustand wiederherstellen
       if (resetInput) {
-        this.ddInput && (this.ddInput.value = '');
+        if (this.options.filter) {
+          this.ddInput && (this.ddInput.value = '');
+        } else {
+          this.#updateDisplayText('');
+        }
       } else if (typeof this.options.onReplaceText === 'function') {
       // Falls du beim Clear lieber den alten Text wiederherstellen willst (optional):
         this.options.onReplaceText(null, this);
@@ -216,6 +228,8 @@ class Dropdown {
     this.ddInput = null;
     this.ul = null;
     this.toggle = null;
+    this.toggleLabel = null;
+    this.hiddenInput = null;
     this.container = null;
     this.items = {};
     this.options = {};
@@ -226,22 +240,107 @@ class Dropdown {
     this.#itemsRendered = false;
   }
 
-  getInput = () => this.ddInput.value;
-
-  matchItem = () => Object.entries(this.items)
-    .filter(item => item[1].description == this.ddInput.value).length;
-
-  setDisabled = state => {
-    let hiddenInput = this.container.querySelector('input[type=hidden]');
-    // let button = this.container.querySelector('button[data-bs-toggle=dropdown]');
-    this.ddInput.disabled = hiddenInput.disabled = this.toggle.disabled = state;
+  getInput = () => {
+    if (this.options.filter) {
+      return this.ddInput?.value ?? '';
+    }
+    return this.selected()?.description ?? '';
   };
 
-  setItems = (items, callback) => {
+  matchItem = () => {
+    if (!this.options.filter) {
+      return this.selected() ? 1 : 0;
+    }
+
+    return Object.entries(this.items)
+      .filter(item => item[1].description == (this.ddInput?.value ?? '')).length;
+  };
+
+  setDisabled = state => {
+    let hiddenInput = this.hiddenInput ?? this.container.querySelector('input[type=hidden]');
+    this.toggle.disabled = state;
+    if (hiddenInput) hiddenInput.disabled = state;
+    if (this.ddInput) this.ddInput.disabled = state;
+  };
+
+  setItems = (items, callback, options = {}) => {
+    let cb = callback;
+    let config = options;
+
+    if (typeof callback === 'object' && callback !== null && typeof options === 'undefined') {
+      config = callback;
+      cb = typeof callback.callback === 'function' ? callback.callback : undefined;
+    }
+
+    if (typeof cb !== 'function') cb = undefined;
+    config = (config && typeof config === 'object') ? config : {};
+
+    const explicitActive = this.#normalizeActiveConfig(config?.active ?? config?.activeValue);
+    const explicitActiveSet = new Set(explicitActive);
+
     if (this.options.listjs) {
-      this.#listjs.add(items, callback);
+      const sourceItems = Array.isArray(items)
+        ? items.slice()
+        : (items && typeof items === 'object' ? Object.values(items) : []);
+      const newItems = { ...this.items };
+      const activeEntries = [];
+
+      sourceItems.forEach((item, index) => {
+        if (!item) return;
+        const key = this.#resolveListItemKey(item, index);
+        if (key == null) return;
+        const keyStr = String(key);
+        const previous = newItems[keyStr] ?? {};
+        const hasActiveFlag = Object.prototype.hasOwnProperty.call(item, 'active');
+        const isExplicitActive = explicitActiveSet.has(keyStr);
+        const isActive = isExplicitActive
+          || (hasActiveFlag ? Boolean(item.active) : Boolean(previous.active));
+
+        if (isExplicitActive) explicitActiveSet.delete(keyStr);
+
+        const stored = { ...previous, ...item };
+        stored.key = stored.key ?? keyStr;
+        stored.active = isActive;
+        newItems[keyStr] = stored;
+
+        if (isActive) {
+          activeEntries.push({ key: keyStr, item: stored });
+        }
+      });
+
+      explicitActiveSet.forEach(keyStr => {
+        if (newItems[keyStr]) {
+          newItems[keyStr].active = true;
+          activeEntries.push({ key: keyStr, item: newItems[keyStr] });
+        }
+      });
+
+      this.items = newItems;
+
+      const afterAdd = addedItems => {
+        if (activeEntries.length) {
+          setTimeout(() => this.#applyActiveEntries(activeEntries), 0);
+        }
+        if (typeof cb === 'function') cb(addedItems);
+      };
+
+      if (typeof cb === 'function' || activeEntries.length) {
+        this.#listjs.add(items, afterAdd);
+      } else {
+        this.#listjs.add(items);
+        if (activeEntries.length) {
+          setTimeout(() => this.#applyActiveEntries(activeEntries), 0);
+        }
+      }
     } else {
-      this.items = { ...this.items, ...items };
+      if (items && typeof items === 'object') {
+        this.items = { ...this.items, ...items };
+      }
+
+      explicitActive.forEach(key => {
+        if (this.items[key]) this.items[key].active = true;
+      });
+
       this.#fillMenu();
     }
     // egal ob list.js oder nicht: Position refreshen, falls offen
@@ -256,6 +355,7 @@ class Dropdown {
       this.ul.innerHTML = '';
 
       let hasSwipeAction = 0;
+      const activeEntries = [];
 
       for (const [ idx, item ] of Object.entries(this.items ?? {})) {
         let li = document.createElement('li'),
@@ -273,6 +373,10 @@ class Dropdown {
 
         li.classList.add('position-relative');
         li.appendChild(button);
+
+        if (item.active) {
+          activeEntries.push({ key: idx, item, button });
+        }
 
         let leftSwipeAllowed = this.options?.swipe?.left?.condition(idx, item, li) ?? true;
         let rightSwipeAllowed = this.options?.swipe?.right?.condition(idx, item, li) ?? true;
@@ -363,6 +467,10 @@ class Dropdown {
         this.ul.appendChild(li);
       }
 
+      if (activeEntries.length) {
+        queueMicrotask(() => this.#applyActiveEntries(activeEntries));
+      }
+
       if (hasSwipeAction) {
         let div = document.createElement('div'),
           code = document.createElement('code');
@@ -382,15 +490,42 @@ class Dropdown {
   };
 
   #replaceText = e => {
-    if (null == e) return;
+    if (null == e) {
+      this.#updateDisplayText('');
+      return;
+    }
+
+    const $root = $(`#${this.id}`);
 
     if (e.type == 'click') {
-      $('input[type=text]', $(`#${this.id}`))
-        .val($(e.currentTarget).text().trim());
+      const text = $(e.currentTarget).text().trim();
+      this.#updateDisplayText(text);
     } else if (e.type == 'focusout') {
-      let key = $('input[type=hidden]', $(`#${this.id}`)).data('value');
-      $(e.currentTarget)
-        .val($(`#${this.id} .dropdown-menu li > *[data-value="${key}"]`).text().trim());
+      const key = $root.find('input[type=hidden]').data('value');
+      const text = key != null
+        ? $(`#${this.id} .dropdown-menu li > *[data-value="${key}"]`).text().trim()
+        : '';
+      this.#updateDisplayText(text);
+    }
+  };
+
+  #updateDisplayText = text => {
+    const value = typeof text === 'string' ? text.trim() : '';
+
+    if (this.options.filter) {
+      if (this.ddInput) this.ddInput.value = value;
+      return;
+    }
+
+    const placeholder = this.options.placeholder ?? '';
+    const displayValue = value !== '' ? value : (placeholder !== '' ? placeholder : ' ');
+    if (this.toggleLabel) {
+      this.toggleLabel.textContent = displayValue;
+      if (value === '') {
+        this.toggle.setAttribute('data-placeholder-active', '1');
+      } else {
+        this.toggle.removeAttribute('data-placeholder-active');
+      }
     }
   };
 
@@ -402,18 +537,21 @@ class Dropdown {
       span = document.createElement('span'),
       bs = (this.options.bootstrapmajor == 5 ? 'bs-' : '');
 
-    this.ddInput = document.createElement('input');
+    if (this.options.filter) {
+      this.ddInput = document.createElement('input');
+      this.ddInput.id = this.id + '-input';
+      this.ddInput.type = 'text';
+      this.ddInput.classList = 'form-control dropdown-search';
+      this.ddInput.setAttribute('autocomplete', 'off');
+      this.ddInput.setAttribute('placeholder', this.options.placeholder);
+      this.ddInput.disabled = this.options.disabled;
+      this.ddInput.required = this.options.required;
+    } else {
+      this.ddInput = null;
+    }
     this.ul = document.createElement('ul');
     this.toggle = document.createElement('button');
-
-    this.ddInput.id = this.id + '-input';
-    this.ddInput.type = 'text';
-    this.ddInput.classList = 'form-control dropdown-search';
-    this.ddInput.setAttribute('autocomplete', 'off');
-    this.ddInput.setAttribute('placeholder', this.options.placeholder);
-    this.ddInput.disabled = this.options.disabled;
-    this.ddInput.required = this.options.required;
-    this.ddInput.value = this.selected()?.description ?? '';
+    this.toggleLabel = null;
 
     hiddenInput.name = this.id;
     hiddenInput.type = 'hidden';
@@ -421,42 +559,69 @@ class Dropdown {
     hiddenInput.setAttribute('data-changed', '0');
     hiddenInput.setAttribute('data-value', this.selected()?.key ?? '');
     hiddenInput.value = this.selected()?.key;
+    this.hiddenInput = hiddenInput;
 
-    label.setAttribute('for', this.id + '-input');
-    label.innerHTML = this.options.placeholder;
+    if (this.options.filter && this.ddInput) {
+      label.setAttribute('for', this.id + '-input');
+      label.innerHTML = this.options.placeholder;
+    }
 
     this.toggle.type = 'button';
-    this.toggle.classList = 'btn btn-sm dropdown-toggle dropdown-toggle-split '
+    let toggleClasses = 'btn btn-sm dropdown-toggle '
+      + (this.options.filter ? 'dropdown-toggle-split ' : '')
       + (this.options.bootstrapmajor == 4 ? ' flex-grow-0 flex-shrink-0 ' : '')
       + this.options.buttonstyle;
+    this.toggle.className = toggleClasses.trim();
     this.toggle.setAttribute('data-' + bs + 'toggle', 'dropdown');
     this.toggle.setAttribute('aria-expanded', 'false');
     this.toggle.disabled = this.options.disabled;
+
+    if (!this.options.filter) {
+      this.toggleLabel = document.createElement('span');
+      this.toggleLabel.classList.add('dropdown-toggle-label');
+      this.toggle.appendChild(this.toggleLabel);
+    }
+
     span.className = (this.options.bootstrapmajor == 5 ? 'visually-hidden' : 'sr-only');
     span.textContent = 'Toggle Dropdown';
     this.toggle.appendChild(span);
 
     this.ul.classList.add('dropdown-menu');
-    this.options.menustyle.split(' ').forEach(c => this.ul.classList.add(c));
     // if (!this.options.listjs) this.ul.classList.add('overflow-y-auto');
     if (this.options.listjs) this.ul.classList.add('list', 'overflow-y-auto', 'w-100', 'mt-1');
     this.ul.style = 'max-height: '
-      + (this.options.menumaxheight ? this.options.menumaxheight : 'unset');
+      + (this.options.menumaxheight ? this.options.menumaxheight : 'unset')
+      + this.options.menustyle;
 
-    this.container.classList += ' input-group dropdown-text dropdown'
-      .concat(this.options.floatingbox ? ' form-floating' : '')
-      .concat(this.options.bootstrapmajor == 4 ? ' btn-group ' : '');
+    this.container.classList.add('dropdown');
+    if (this.options.filter) {
+      this.container.classList.add('input-group', 'dropdown-text');
+      if (this.options.floatingbox) this.container.classList.add('form-floating');
+    } else {
+      this.container.classList.remove('input-group', 'dropdown-text', 'form-floating');
+    }
+    if (this.options.bootstrapmajor == 4) {
+      this.container.classList.add('btn-group');
+    } else {
+      this.container.classList.remove('btn-group');
+    }
     this.container.setAttribute('aria-expanded', 'false');
 
-    this.container.appendChild(this.ddInput);
+    if (this.options.filter && this.ddInput) {
+      this.container.appendChild(this.ddInput);
+    }
     this.container.appendChild(hiddenInput);
-    if (this.options.floatingbox)
+    if (this.options.filter && this.options.floatingbox)
       this.container.appendChild(label);
     this.container.appendChild(this.toggle);
     this.container.appendChild(this.ul);
 
-    setTimeout(() => label.style = 'left: ' + this.ddInput.offsetLeft + 'px; z-index: 10', 350);
-    label.style = 'left: ' + this.ddInput.offsetLeft + 'px; z-index: 10';
+    if (this.options.filter && this.options.floatingbox && this.ddInput) {
+      setTimeout(() => label.style = 'left: ' + this.ddInput.offsetLeft + 'px; z-index: 10', 350);
+      label.style = 'left: ' + this.ddInput.offsetLeft + 'px; z-index: 10';
+    }
+
+    this.#updateDisplayText(this.selected()?.description ?? '');
 
     // Hilfreich auch als HTML-Attribut am Container:
     this.container.setAttribute('data-bs-auto-close', 'outside');
@@ -530,7 +695,7 @@ class Dropdown {
           const key = $root.find('input[type=hidden]').data('value');
           if (key && this.options.onReplaceText) {
           // fake "focusout"-Event für deine onReplaceText-Logik
-            this.options.onReplaceText({ type: 'focusout', currentTarget: this.ddInput }, this);
+            this.options.onReplaceText({ type: 'focusout', currentTarget: this.ddInput ?? this.toggle }, this);
           }
         }
       });
@@ -625,7 +790,15 @@ class Dropdown {
         .trigger('change');
       $root.data('item-choice', '1');
       this.unselect();
-      this.ddInput.value = '';
+      if (this.items && typeof this.items === 'object') {
+        for (const key in this.items) {
+          if (Object.prototype.hasOwnProperty.call(this.items, key) && this.items[key]) {
+            this.items[key].active = false;
+          }
+        }
+      }
+      this.#clearActiveClasses();
+      this.#updateDisplayText('');
     }
     else
     {
@@ -664,6 +837,154 @@ class Dropdown {
     // eslint-disable-next-line no-unused-vars
     for (const [ idx, item ] of Object.entries(this.items)) {
       item.selected = false;
+    }
+  }
+
+  #detectValueKey () {
+    if (!this.options.listjs) return null;
+
+    const candidates = this.options.valueNames ?? [];
+
+    for (const entry of candidates) {
+      if (typeof entry === 'object' && entry !== null) {
+        if (entry.name && entry.attr && /data-(value|key)$/i.test(entry.attr)) {
+          return entry.name;
+        }
+        if (typeof entry.value === 'string' && entry.value.length) {
+          return entry.value;
+        }
+        if (Array.isArray(entry.data)) {
+          const match = entry.data.find(v => v === 'value' || v === 'key');
+          if (match) return match;
+        }
+      } else if (typeof entry === 'string' && entry.length) {
+        if (entry === 'value' || entry === 'key') return entry;
+      }
+    }
+
+    return null;
+  }
+
+  #normalizeActiveConfig (active) {
+    if (active == null) return [];
+    if (Array.isArray(active)) {
+      return active
+        .filter(value => value !== undefined && value !== null)
+        .map(value => String(value));
+    }
+    return [ String(active) ];
+  }
+
+  #resolveListItemKey (item, fallbackIndex) {
+    if (!item) return fallbackIndex != null ? String(fallbackIndex) : null;
+
+    const keyCandidates = [];
+    if (this.valueKey && item[this.valueKey] != null) keyCandidates.push(item[this.valueKey]);
+    if (item.key != null) keyCandidates.push(item.key);
+    if (item.id != null) keyCandidates.push(item.id);
+    if (item.value != null) keyCandidates.push(item.value);
+
+    for (const candidate of keyCandidates) {
+      if (candidate !== undefined && candidate !== null && candidate !== '') return String(candidate);
+    }
+
+    if (fallbackIndex != null) return String(fallbackIndex);
+    return null;
+  }
+
+  #clearActiveClasses () {
+    if (!this.container) return;
+    const activeNodes = this.container.querySelectorAll('.dropdown-menu .dropdown-item.active');
+    activeNodes.forEach(node => node.classList.remove('active'));
+    const ariaNodes = this.container.querySelectorAll('.dropdown-menu [aria-current="true"]');
+    ariaNodes.forEach(node => node.removeAttribute('aria-current'));
+  }
+
+  #findButtonByValue (value) {
+    if (!this.container) return null;
+    if (value === undefined || value === null) return null;
+    const stringValue = String(value);
+
+    let escaped = stringValue;
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      escaped = CSS.escape(stringValue);
+    } else {
+      escaped = stringValue.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    }
+
+    return this.container.querySelector(`.dropdown-menu [data-value="${escaped}"]`);
+  }
+
+  #applyActiveEntries (entries) {
+    if (!Array.isArray(entries) || !entries.length) return;
+    if (!this.container) return;
+
+    const $root = $(`#${this.id}`);
+    if (!$root.length) return;
+
+    this.#clearActiveClasses();
+
+    if (this.items && typeof this.items === 'object') {
+      for (const key in this.items) {
+        if (Object.prototype.hasOwnProperty.call(this.items, key) && this.items[key]) {
+          this.items[key].active = false;
+        }
+      }
+    }
+
+    this.unselect();
+
+    const hiddenEl = this.hiddenInput ?? $root.find('input[type=hidden]').get(0);
+    const $hidden = hiddenEl ? $(hiddenEl) : null;
+
+    let primaryData = null;
+
+    for (const entry of entries) {
+      const keyRaw = entry?.key ?? entry?.item?.key;
+      if (keyRaw === undefined || keyRaw === null) continue;
+      const key = String(keyRaw);
+      const button = entry.button ?? this.#findButtonByValue(key);
+      const item = entry.item ?? (this.items && this.items[key]) ?? null;
+
+      if (button) {
+        button.classList.add('active');
+        button.setAttribute('aria-current', 'true');
+      }
+
+      if (!primaryData) {
+        primaryData = { key, button, item };
+        if ($hidden) {
+          $hidden
+            .data('value', key)
+            .prop('data-value', key)
+            .val(key);
+        }
+        $root.data('item-choice', '1');
+
+        if (this.items && typeof this.items === 'object') {
+          if (!this.items[key]) this.items[key] = { key };
+          this.items[key].selected = true;
+          this.items[key].active = true;
+        }
+
+        this.#setSelected(key);
+      } else if (this.items && typeof this.items === 'object' && this.items[key]) {
+        this.items[key].active = true;
+      }
+    }
+
+    if (!primaryData) return;
+
+    // eslint-disable-next-line no-unused-vars
+    const { button: primaryButton, item: primaryItem, key: primaryKey } = primaryData;
+
+    if (primaryButton && typeof this.options.onReplaceText === 'function') {
+      this.options.onReplaceText({ type: 'click', currentTarget: primaryButton }, this);
+    } else {
+      const fallbackText = primaryButton?.textContent?.trim()
+        ?? primaryItem?.description
+        ?? '';
+      this.#updateDisplayText(fallbackText);
     }
   }
 
@@ -728,7 +1049,6 @@ class Dropdown {
     }
     return false;
   }
-
 
 }
 
