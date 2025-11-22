@@ -372,13 +372,13 @@ class Dropdown {
         }
         else if (typeof itemDescription == 'object') {
 
+          this.toggle.classList.add('h-100');
+
           let shortContent = itemDescription.short ?? '';
           if (shortContent instanceof Element) {
             button.appendChild(shortContent);
           }
           else {
-            this.toggle.classList.add('h-100');
-            this.toggle.classList.add('w-100');
             let shortSpan = document.createElement('span');
             shortSpan.className = 'dd-short';
             shortSpan.textContent = itemDescription.short;
