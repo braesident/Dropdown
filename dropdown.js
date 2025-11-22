@@ -173,7 +173,7 @@ class Dropdown {
         if (this.options.filter) {
           this.ddInput && (this.ddInput.value = '');
         } else {
-          this.#updateDisplayText('');
+          this.#updateDisplay('');
         }
       } else if (typeof this.options.onReplaceText === 'function') {
       // Falls du beim Clear lieber den alten Text wiederherstellen willst (optional):
@@ -365,7 +365,34 @@ class Dropdown {
         button.classList = 'dropdown-item border-bottom';
         button.setAttribute('data-value', idx);
         button.disabled = (item.disabled ? item.disabled : false);
-        button.innerHTML = item.description ?? '';
+
+        let itemDescription = item.description ?? '';
+        if (itemDescription instanceof Element) {
+          button.appendChild(itemDescription);
+        }
+        else if (typeof itemDescription == 'object') {
+
+          let shortContent = itemDescription.short ?? '';
+          if (shortContent instanceof Element) {
+            button.appendChild(shortContent);
+          }
+          else {
+            this.toggle.classList.add('h-100');
+            this.toggle.classList.add('w-100');
+            let shortSpan = document.createElement('span');
+            shortSpan.className = 'dd-short';
+            shortSpan.textContent = itemDescription.short;
+            button.appendChild(shortSpan);
+          }
+
+          let extendedSpan = document.createElement('span');
+          extendedSpan.className = 'dd-extended';
+          extendedSpan.textContent = itemDescription.extended;
+          button.appendChild(extendedSpan);
+        }
+        else {
+          button.innerHTML = item.description ?? ''
+        }
 
         if (item.dataList)
           for (const [ key, value ] of Object.entries(item.dataList ?? {}))
@@ -491,26 +518,42 @@ class Dropdown {
 
   #replaceText = e => {
     if (null == e) {
-      this.#updateDisplayText('');
+      this.#updateDisplay('');
       return;
     }
 
     const $root = $(`#${this.id}`);
 
     if (e.type == 'click') {
-      const text = $(e.currentTarget).text().trim();
-      this.#updateDisplayText(text);
+      let selection;
+
+      if (e.currentTarget.firstChild instanceof Text) {
+        selection = e.currentTarget.firstChild.data.trim();
+      }
+      else if (e.currentTarget.firstChild instanceof Element && e.currentTarget.firstChild.classList.contains('dd-short')) {
+
+        selection = e.currentTarget.firstChild.innerText.trim();
+      }
+      else if (e.currentTarget.firstChild instanceof Element) {
+        selection = e.currentTarget.firstChild.cloneNode(true);
+      }
+      else
+      {
+        selection = '';
+      }
+
+      this.#updateDisplay(selection);
     } else if (e.type == 'focusout') {
       const key = $root.find('input[type=hidden]').data('value');
       const text = key != null
         ? $(`#${this.id} .dropdown-menu li > *[data-value="${key}"]`).text().trim()
         : '';
-      this.#updateDisplayText(text);
+      this.#updateDisplay(text);
     }
   };
 
-  #updateDisplayText = text => {
-    const value = typeof text === 'string' ? text.trim() : '';
+  #updateDisplay = selection => {
+    const value = typeof selection === 'string' ? selection.trim() : selection;
 
     if (this.options.filter) {
       if (this.ddInput) this.ddInput.value = value;
@@ -520,7 +563,15 @@ class Dropdown {
     const placeholder = this.options.placeholder ?? '';
     const displayValue = value !== '' ? value : (placeholder !== '' ? placeholder : ' ');
     if (this.toggleLabel) {
-      this.toggleLabel.textContent = displayValue;
+
+      this.toggleLabel.innerHTML = '';
+      if (displayValue instanceof Element) {
+        this.toggleLabel.appendChild(displayValue)
+      }
+      else {
+        this.toggleLabel.textContent = displayValue;
+      }
+
       if (value === '') {
         this.toggle.setAttribute('data-placeholder-active', '1');
       } else {
@@ -567,7 +618,7 @@ class Dropdown {
     }
 
     this.toggle.type = 'button';
-    let toggleClasses = 'btn btn-sm dropdown-toggle '
+    let toggleClasses = 'btn dropdown-toggle '
       + (this.options.filter ? 'dropdown-toggle-split ' : '')
       + (this.options.bootstrapmajor == 4 ? ' flex-grow-0 flex-shrink-0 ' : '')
       + this.options.buttonstyle;
@@ -579,6 +630,7 @@ class Dropdown {
     if (!this.options.filter) {
       this.toggleLabel = document.createElement('span');
       this.toggleLabel.classList.add('dropdown-toggle-label');
+      this.toggleLabel.innerText = ' ';
       this.toggle.appendChild(this.toggleLabel);
     }
 
@@ -621,7 +673,7 @@ class Dropdown {
       label.style = 'left: ' + this.ddInput.offsetLeft + 'px; z-index: 10';
     }
 
-    this.#updateDisplayText(this.selected()?.description ?? '');
+    this.#updateDisplay(this.selected()?.description ?? '');
 
     // Hilfreich auch als HTML-Attribut am Container:
     this.container.setAttribute('data-bs-auto-close', 'outside');
@@ -721,11 +773,19 @@ class Dropdown {
       // Item-Klick: wählen, schreiben, schließen
       $menu.on(`click${ns}`, 'li > *', e => {
         this.options.onReplaceText?.(e, this);
-        $root.find('input[type=hidden]')
+        const $hidden = $root.find('input[type=hidden]');
+        $hidden
           .data('value', $(e.currentTarget).data('value'))
           .prop('data-value', $(e.currentTarget).data('value'))
           .val($(e.currentTarget).data('value'))
           .trigger('change');
+
+        const hiddenEl = $hidden[0];
+        if (hiddenEl) {
+          hiddenEl.dispatchEvent(new Event('input', { bubbles: true }));
+          hiddenEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
         $root.data('item-choice', '1');
         this.unselect();
         this.#setSelected($(e.currentTarget).data('value'));
@@ -798,7 +858,7 @@ class Dropdown {
         }
       }
       this.#clearActiveClasses();
-      this.#updateDisplayText('');
+      this.#updateDisplay('');
     }
     else
     {
@@ -984,7 +1044,7 @@ class Dropdown {
       const fallbackText = primaryButton?.textContent?.trim()
         ?? primaryItem?.description
         ?? '';
-      this.#updateDisplayText(fallbackText);
+      this.#updateDisplay(fallbackText);
     }
   }
 
