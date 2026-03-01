@@ -3,6 +3,7 @@ class Dropdown {
   options = {
     bootstrapmajor: 5,
     buttonstyle: 'btn-outline-secondary', // add to classlist
+    caret: true,
     disabled: false,
     floatingbox: false,
     items: {},
@@ -110,6 +111,7 @@ class Dropdown {
     this.container = document.getElementById(elementselector);
 
     this.options = this.#merge(this.options, options);
+    this.options.caret = this.options.caret !== false;
     this.options.filter = this.options.filter !== false;
     this.valueKey = this.options.valueKey ?? this.#detectValueKey();
     this.items = this.options.items;
@@ -570,6 +572,7 @@ class Dropdown {
       }
       else {
         this.toggleLabel.textContent = displayValue;
+        //this.toggleLabel.innerHTML = displayValue;
       }
 
       if (value === '') {
@@ -618,7 +621,8 @@ class Dropdown {
     }
 
     this.toggle.type = 'button';
-    let toggleClasses = 'btn dropdown-toggle '
+    let toggleClasses = 'btn '
+      + (this.options.caret ? 'dropdown-toggle ' : '')
       + (this.options.filter ? 'dropdown-toggle-split ' : '')
       + (this.options.bootstrapmajor == 4 ? ' flex-grow-0 flex-shrink-0 ' : '')
       + this.options.buttonstyle;
