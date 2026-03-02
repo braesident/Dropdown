@@ -520,21 +520,15 @@ class Dropdown {
     const $root = $(`#${this.id}`);
 
     if (e.type == 'click') {
-      let selection;
+      const firstElement = e.currentTarget.firstElementChild;
+      const clickText = e.currentTarget.textContent?.trim() ?? '';
+      let selection = clickText;
 
-      if (e.currentTarget.firstChild instanceof Text) {
-        selection = e.currentTarget.firstChild.data.trim();
+      if (firstElement instanceof Element && firstElement.classList.contains('dd-short')) {
+        selection = firstElement.innerText.trim();
       }
-      else if (e.currentTarget.firstChild instanceof Element && e.currentTarget.firstChild.classList.contains('dd-short')) {
-
-        selection = e.currentTarget.firstChild.innerText.trim();
-      }
-      else if (e.currentTarget.firstChild instanceof Element) {
-        selection = e.currentTarget.firstChild.cloneNode(true);
-      }
-      else
-      {
-        selection = '';
+      else if (firstElement instanceof Element && !this.options.filter) {
+        selection = firstElement.cloneNode(true);
       }
 
       this.#updateDisplay(selection);
@@ -551,7 +545,16 @@ class Dropdown {
     const value = typeof selection === 'string' ? selection.trim() : selection;
 
     if (this.options.filter) {
-      if (this.ddInput) this.ddInput.value = value;
+      let inputValue = '';
+      if (typeof value === 'string') {
+        inputValue = value;
+      } else if (value instanceof Element) {
+        inputValue = value.textContent?.trim() ?? '';
+      } else if (value !== undefined && value !== null) {
+        inputValue = String(value).trim();
+      }
+
+      if (this.ddInput) this.ddInput.value = inputValue;
       return;
     }
 
