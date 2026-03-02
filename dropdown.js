@@ -52,12 +52,6 @@ class Dropdown {
   #listjs;
 
   /**
-   * @callback ItemClickCallback
-   * @param {Event} e
-   * @param {Dropdown} t
-   */
-
-  /**
    * @callback itemSelectedCallback
    * @param {Event} e
    */
@@ -93,7 +87,6 @@ class Dropdown {
    * @param {string} options.placeholder Set an input placeholder
    * @param {boolean} options.required Set to true if the value required for a form
    * @param {boolean} options.disabled Set to true if the dropdown should disabled
-   * @param {ItemClickCallback} options.onItemClick Replace code on click item
    * @param {itemSelectedCallback} options.onSelected Runs code after selection a menu entry
    * @param {inputCallback} options.onInput Runs an additional code on input
    * @param {object} options.swipe Object to descripe swipe actions
