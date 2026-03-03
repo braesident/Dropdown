@@ -795,11 +795,12 @@ class Dropdown {
       });
 
       let _autoSelTimer = null;
-      $input.on(`input${ns} change${ns}`, () => {
+      $input.on(`input${ns} change${ns}`, e => {
         clearTimeout(_autoSelTimer);
         _autoSelTimer = setTimeout(() => {
           this.#autoSelectIfUnambiguous();
         }, 120);
+        this.options.onInput?.(e, $(e.currentTarget).val());
       });
 
       // Live-Filter (ohne list.js)
@@ -811,7 +812,6 @@ class Dropdown {
             }
           });
           this.dd._popper && this.dd._popper.update();
-          this.options.onInput?.(e, $(e.currentTarget).val());
         });
       }
     }, 0);
