@@ -55,6 +55,7 @@ The selected value is stored in the hidden input with `name="countryDropdown"`.
 
 ```js
 const dd = new Dropdown('exampleDropdown', {
+  autoselectsingle: true,
   bootstrapmajor: 5,
   buttonstyle: 'btn-outline-secondary',
   caret: true,
@@ -91,6 +92,7 @@ const dd = new Dropdown('exampleDropdown', {
 
 | Option | Type | Default | Description |
 |---|---|---|---|
+| `autoselectsingle` | `boolean` | `true` | Automatically selects the only visible match while typing (`false` disables this behavior). |
 | `bootstrapmajor` | `number` | `5` | Bootstrap major version (`5` or `4`). |
 | `buttonstyle` | `string` | `'btn-outline-secondary'` | Extra classes on the toggle button. |
 | `caret` | `boolean` | `true` | Shows/hides the caret on the button (`false` disables it). |
@@ -162,14 +164,23 @@ dd.clear({
 });
 ```
 
-### 4. Disable/enable dropdown
+### 4. Disable automatic single-match selection
+
+```js
+const dd = new Dropdown('toDropdown', {
+  listjs: true,
+  autoselectsingle: false
+});
+```
+
+### 5. Disable/enable dropdown
 
 ```js
 dd.setDisabled(true);  // disable
 dd.setDisabled(false); // enable
 ```
 
-### 5. Swipe action on list entries
+### 6. Swipe action on list entries
 
 ```js
 const taskDd = new Dropdown('taskDropdown', {
@@ -189,7 +200,7 @@ const taskDd = new Dropdown('taskDropdown', {
 });
 ```
 
-### 6. Dispose cleanly (for example before DOM removal)
+### 7. Dispose cleanly (for example before DOM removal)
 
 ```js
 dd.dispose();

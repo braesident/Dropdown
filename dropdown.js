@@ -1,6 +1,7 @@
 class Dropdown {
 
   options = {
+    autoselectsingle: true,
     bootstrapmajor: 5,
     buttonstyle: 'btn-outline-secondary', // add to classlist
     caret: true,
@@ -104,6 +105,7 @@ class Dropdown {
     this.container = document.getElementById(elementselector);
 
     this.options = this.#merge(this.options, options);
+    this.options.autoselectsingle = this.options.autoselectsingle !== false;
     this.options.caret = this.options.caret !== false;
     this.options.filter = this.options.filter !== false;
     this.valueKey = this.options.valueKey ?? this.#detectValueKey();
@@ -796,10 +798,12 @@ class Dropdown {
 
       let _autoSelTimer = null;
       $input.on(`input${ns} change${ns}`, e => {
-        clearTimeout(_autoSelTimer);
-        _autoSelTimer = setTimeout(() => {
-          this.#autoSelectIfUnambiguous();
-        }, 120);
+        if (this.options.autoselectsingle) {
+          clearTimeout(_autoSelTimer);
+          _autoSelTimer = setTimeout(() => {
+            this.#autoSelectIfUnambiguous();
+          }, 120);
+        }
         this.options.onInput?.(e, $(e.currentTarget).val());
       });
 
