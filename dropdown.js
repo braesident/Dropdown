@@ -10,9 +10,10 @@ class Dropdown {
     items: {},
     listjs: false,
     filter: true,
-    menumaxheight: '300px',
+    menumaxheight: 'auto',
     menustyle: '',
     placeholder: '',
+    reference: 'toggle',
     required: false,
     swipe: {
       left: {
@@ -83,9 +84,10 @@ class Dropdown {
    * @param {string} options.buttonstyle Add class attributes like bootstrap designs
    * @param {boolean} options.floatingbox Set to true if you have bootstraps floating elements
    * @param {object} options.items Object set for the selectable items
-   * @param {string} options.menumaxheight Style option for the maximum height of the menu. Default: 300px
+   * @param {string} options.menumaxheight Maximum menu height. "auto" uses the available viewport space. Default: auto
    * @param {string} options.menustyle Add class attributes like bootstrap designs for the menu
    * @param {string} options.placeholder Set an input placeholder
+   * @param {string|Element|object} options.reference Bootstrap reference used to position the menu. Default: toggle
    * @param {boolean} options.required Set to true if the value required for a form
    * @param {boolean} options.disabled Set to true if the dropdown should disabled
    * @param {itemSelectedCallback} options.onSelected Runs code after selection a menu entry
@@ -113,6 +115,9 @@ class Dropdown {
 
     this._ns = `.exudd-${this.id}`;
     this._onDocPointerDown = null;
+    this._onMenuViewportChange = null;
+    this._menuLayoutFrame = null;
+    this._menuLayoutVersion = 0;
 
     this.options.onReplaceText = this.options.onReplaceText ?? this.#replaceText;
 
@@ -191,7 +196,7 @@ class Dropdown {
 
     // Wenn das Menü offen ist, Popper neu positionieren
     if (this.dd?._popper && (this.ul?.classList.contains('show') || this.toggle?.classList.contains('show'))) {
-      try { this.dd._popper.update(); } catch { /* empty */ }
+      this.#refreshMenuLayout();
     }
   }
 
@@ -204,6 +209,7 @@ class Dropdown {
     if (this._onDocPointerDown) {
       try { document.removeEventListener('pointerdown', this._onDocPointerDown, { capture: true }); } catch { /* empty */ }
     }
+    this.#stopMenuViewportTracking();
 
     try { $input.off(ns); } catch { /* empty */ }
     try { $menu.off(ns); } catch { /* empty */ }
@@ -233,6 +239,8 @@ class Dropdown {
     this.dd = null;
 
     this._onDocPointerDown = null;
+    this._onMenuViewportChange = null;
+    this._menuLayoutFrame = null;
     this._ns = null;
     this.#itemsRendered = false;
   }
@@ -342,7 +350,7 @@ class Dropdown {
     }
     // egal ob list.js oder nicht: Position refreshen, falls offen
     if (this.ul.classList.contains('show') || this.toggle.classList.contains('show')) {
-      this.dd._popper && this.dd._popper.update();
+      this.#refreshMenuLayout();
     }
   };
 
@@ -581,6 +589,154 @@ class Dropdown {
     }
   };
 
+  /**
+   * Check whether the menu height should follow the available viewport space.
+   * @returns {boolean} True when automatic menu sizing is enabled.
+   */
+  #usesAutomaticMenuHeight = () => (
+    typeof this.options.menumaxheight === 'string'
+    && this.options.menumaxheight.trim().toLowerCase() === 'auto'
+  );
+
+  /**
+   * Resolve the element used by Bootstrap as the Popper reference.
+   * @returns {Element|null} The reference element used for height calculations.
+   */
+  #getMenuReferenceElement = () => {
+    const reference = this.options.reference;
+
+    if (reference === 'parent') return this.container;
+    if (reference && typeof reference.getBoundingClientRect === 'function') return reference;
+    if (reference?.contextElement && typeof reference.contextElement.getBoundingClientRect === 'function') {
+      return reference.contextElement;
+    }
+
+    return this.toggle;
+  };
+
+  /**
+   * Remove a previous automatic height limit before Popper chooses a placement.
+   */
+  #resetAutomaticMenuHeight = () => {
+    if (this.ul && this.#usesAutomaticMenuHeight()) {
+      this.ul.style.maxHeight = 'none';
+      this.ul.style.overflowY = 'auto';
+    }
+  };
+
+  /**
+   * Limit the menu to the viewport space on the side selected by Popper.
+   */
+  #applyAutomaticMenuHeight = () => {
+    if (!this.ul || !this.#usesAutomaticMenuHeight()) return;
+
+    const reference = this.#getMenuReferenceElement();
+    if (!reference) return;
+
+    const referenceRect = reference.getBoundingClientRect();
+    const menuRect = this.ul.getBoundingClientRect();
+    const visualViewport = window.visualViewport;
+    const viewportTop = visualViewport?.offsetTop ?? 0;
+    const viewportHeight = visualViewport?.height ?? document.documentElement.clientHeight;
+    const viewportBottom = viewportTop + viewportHeight;
+    const placement = this.ul.getAttribute('data-popper-placement')
+      ?? this.dd?._popper?.state?.placement
+      ?? 'bottom-start';
+    const side = placement.split('-')[0];
+    const spaceAbove = Math.max(0, referenceRect.top - viewportTop);
+    const spaceBelow = Math.max(0, viewportBottom - referenceRect.bottom);
+    const isAbove = side === 'top' || (side !== 'bottom' && spaceAbove > spaceBelow);
+    const gap = isAbove
+      ? Math.max(0, referenceRect.top - menuRect.bottom)
+      : Math.max(0, menuRect.top - referenceRect.bottom);
+    const availableHeight = Math.max(0, Math.floor((isAbove ? spaceAbove : spaceBelow) - gap));
+
+    this.ul.style.maxHeight = `${availableHeight}px`;
+    this.ul.style.overflowY = 'auto';
+  };
+
+  /**
+   * Recalculate Popper placement and apply the matching automatic height limit.
+   */
+  #refreshAutomaticMenuHeight = () => {
+    if (
+      !this.ul
+      || !this.#usesAutomaticMenuHeight()
+      || (!this.ul.classList.contains('show') && !this.toggle?.classList.contains('show'))
+    ) return;
+
+    const layoutVersion = ++this._menuLayoutVersion;
+    const popper = this.dd?._popper;
+    this.#resetAutomaticMenuHeight();
+
+    if (!popper?.update) {
+      this.#applyAutomaticMenuHeight();
+      return;
+    }
+
+    Promise.resolve(popper.update())
+      .then(() => {
+        if (layoutVersion !== this._menuLayoutVersion || !this.ul) return null;
+        this.#applyAutomaticMenuHeight();
+        return popper.update();
+      })
+      .then(() => {
+        if (layoutVersion === this._menuLayoutVersion && this.ul) {
+          this.#applyAutomaticMenuHeight();
+        }
+      })
+      .catch(() => { /* Popper may be disposed while an update is pending. */ });
+  };
+
+  /**
+   * Refresh Popper and apply automatic sizing when it is enabled.
+   */
+  #refreshMenuLayout = () => {
+    if (this.#usesAutomaticMenuHeight()) {
+      this.#refreshAutomaticMenuHeight();
+      return;
+    }
+
+    try { this.dd?._popper?.update(); } catch { /* empty */ }
+  };
+
+  /**
+   * Track viewport and scroll changes while an automatically sized menu is open.
+   */
+  #startMenuViewportTracking = () => {
+    if (!this.#usesAutomaticMenuHeight() || this._onMenuViewportChange) return;
+
+    this._onMenuViewportChange = () => {
+      if (this._menuLayoutFrame !== null) cancelAnimationFrame(this._menuLayoutFrame);
+      this._menuLayoutFrame = requestAnimationFrame(() => {
+        this._menuLayoutFrame = null;
+        this.#refreshAutomaticMenuHeight();
+      });
+    };
+
+    window.addEventListener('resize', this._onMenuViewportChange, { passive: true });
+    window.addEventListener('scroll', this._onMenuViewportChange, { capture: true, passive: true });
+    window.visualViewport?.addEventListener('resize', this._onMenuViewportChange, { passive: true });
+    window.visualViewport?.addEventListener('scroll', this._onMenuViewportChange, { passive: true });
+  };
+
+  /**
+   * Stop viewport tracking and cancel a pending layout calculation.
+   */
+  #stopMenuViewportTracking = () => {
+    if (this._onMenuViewportChange) {
+      window.removeEventListener('resize', this._onMenuViewportChange);
+      window.removeEventListener('scroll', this._onMenuViewportChange, true);
+      window.visualViewport?.removeEventListener('resize', this._onMenuViewportChange);
+      window.visualViewport?.removeEventListener('scroll', this._onMenuViewportChange);
+    }
+    if (this._menuLayoutFrame !== null) cancelAnimationFrame(this._menuLayoutFrame);
+
+    this._onMenuViewportChange = null;
+    this._menuLayoutFrame = null;
+    this._menuLayoutVersion++;
+  };
+
   #prepareContainer = () => {
 
     let hiddenInput = document.createElement('input'),
@@ -641,10 +797,13 @@ class Dropdown {
     this.toggle.appendChild(span);
 
     this.ul.classList.add('dropdown-menu');
-    // if (!this.options.listjs) this.ul.classList.add('overflow-y-auto');
     if (this.options.listjs) this.ul.classList.add('list', 'overflow-y-auto', 'w-100', 'mt-1');
+    const menuMaxHeight = this.#usesAutomaticMenuHeight()
+      ? 'none'
+      : (this.options.menumaxheight || 'none');
     this.ul.style = 'max-height: '
-      + (this.options.menumaxheight ? this.options.menumaxheight : 'unset')
+      + menuMaxHeight
+      + (this.options.menumaxheight ? '; overflow-y: auto;' : ';')
       + this.options.menustyle;
 
     this.container.classList.add('dropdown');
@@ -685,15 +844,14 @@ class Dropdown {
     if (wbs?.Dropdown?.getOrCreateInstance) {           // Bootstrap 5+
       this.dd = wbs.Dropdown.getOrCreateInstance(this.toggle, {
         autoClose: false,
-        reference: 'toggle',
-        popperConfig: { placement: 'bottom-start' }
+        reference: this.options.reference
       });
     } else if (wbs?.Dropdown) {                         // Bootstrap 4.x fallback
       this.dd = $(this.toggle).data('bs.dropdown') ?? wbs.Dropdown.getInstance?.(this.toggle);
       if (!this.dd) {
         this.dd = new wbs.Dropdown(this.toggle, {
           boundary: 'viewport',   // Position sauber
-          reference: 'toggle'
+          reference: this.options.reference
         });
         $(this.toggle).data('bs.dropdown', this.dd);
       }
@@ -734,15 +892,21 @@ class Dropdown {
         }
       };
 
-      // Beim Öffnen: Outside-Close aktivieren + Popper updaten
+      $(this.container).on(`show.bs.dropdown${ns}`, () => {
+        this.#resetAutomaticMenuHeight();
+      });
+
+      // Beim Öffnen: Outside-Close aktivieren + Popper und Menühöhe aktualisieren
       $(this.container).on(`shown.bs.dropdown${ns}`, () => {
         document.addEventListener('pointerdown', this._onDocPointerDown, { capture: true });
-        queueMicrotask(() => this.dd?._popper && this.dd._popper.update());
+        this.#startMenuViewportTracking();
+        queueMicrotask(() => this.#refreshMenuLayout());
       });
 
       // Beim Schließen: Outside-Close wieder entfernen + ggf. Text restaurieren
       $(this.container).on(`hidden.bs.dropdown${ns}`, () => {
         document.removeEventListener('pointerdown', this._onDocPointerDown, { capture: true });
+        this.#stopMenuViewportTracking();
 
         // Wenn kein Item gewählt wurde, Text zurücksetzen
         if ($root.data('item-choice') == '0') {
@@ -815,7 +979,7 @@ class Dropdown {
               $(item).addClass('d-none');
             }
           });
-          this.dd._popper && this.dd._popper.update();
+          this.#refreshMenuLayout();
         });
       }
     }, 0);
