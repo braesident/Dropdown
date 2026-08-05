@@ -6,6 +6,7 @@ This extension wraps a Bootstrap dropdown into a reusable JavaScript class (`Dro
 - a hidden input for stable form values
 - dynamic item loading/replacement
 - programmatic selection and reset
+- an optional integrated list for multiple selected items
 - optional swipe actions per item
 - optional List.js integration
 
@@ -68,6 +69,7 @@ const dd = new Dropdown('exampleDropdown', {
   menustyle: '',
   placeholder: '',
   required: false,
+  selectionList: false,
   swipe: {
     left: {
       hint: false,
@@ -105,6 +107,7 @@ const dd = new Dropdown('exampleDropdown', {
 | `menustyle` | `string` | `''` | Additional inline style for the menu. |
 | `placeholder` | `string` | `''` | Placeholder for search input or label placeholder when `filter: false`. |
 | `required` | `boolean` | `false` | Sets `required` on the search input. |
+| `selectionList` | `boolean\|object` | `false` | Enables an integrated, configurable list for multiple selected items. Passing an object enables it unless `enabled: false` is set. |
 | `swipe.left.hint` | `string\|false` | `false` | HTML hint for left swipe (for example an icon). |
 | `swipe.left.action` | `function\|false` | `false` | Callback on valid left swipe (`(event, li) => {}`). |
 | `swipe.left.condition` | `function` | `(item) => true` | Condition to allow left swipe (`(idx, item, li) => boolean`). |
@@ -206,12 +209,68 @@ const taskDd = new Dropdown('taskDropdown', {
 dd.dispose();
 ```
 
+### 8. Display multiple selected items inside the dropdown
+
+```js
+const recipientDropdown = new Dropdown('recipientDropdown', {
+  placeholder: 'Add recipient',
+  selectionList: {
+    valueKey: 'email',
+    labelKey: 'label',
+    titleKey: 'email',
+    itemClass: 'badge text-bg-primary d-inline-flex align-items-center gap-2',
+    removeButtonClass: 'btn btn-sm p-0 border-0 text-white lh-1',
+    getRemoveButtonAriaLabel: item => `Remove ${item.label}`,
+    onChanged: items => console.log('Recipients:', items)
+  }
+});
+
+recipientDropdown.addSelectedItem({
+  email: 'person@example.com',
+  label: 'Example Person'
+});
+```
+
+The list is rendered as `.dropdown-selection-list` inside the dropdown container and does not need a separate element ID. Its default placement is before the search input. `placement: 'after-input'` moves it behind the input.
+
+With `floatingbox: true`, the label remains at the leading edge and stays floated while selected items exist. A customized input placeholder is restored after the last selected item is removed.
+
+The following `selectionList` properties control data and layout:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | `true` for object configuration | Explicitly enables or disables the list. |
+| `containerClass` | `string` | Bootstrap input-group classes | Classes for the integrated list container. |
+| `itemClass` | `string` | Bootstrap secondary badge classes | Classes for each selected item. |
+| `labelClass` | `string` | `'dropdown-selection-label'` | Classes for the item label. |
+| `removeButtonClass` | `string` | Bootstrap small button classes | Classes for each remove button. |
+| `removeButtonText` | `string` | `'×'` | Default remove-button content. |
+| `itemTag` | `string` | `'span'` | HTML tag used for each selected item. |
+| `placement` | `string` | `'before-input'` | Use `'after-input'` to place the list after the search input. |
+| `valueKey` | `string` | `'key'` | Item property used as the stable, unique key. |
+| `labelKey` | `string` | `'label'` | Item property used as visible text. |
+| `titleKey` | `string\|null` | `null` | Optional item property copied to the `title` attribute. |
+| `getKey` | `function\|null` | `null` | Custom key resolver: `(item, dropdown) => key`. |
+| `getLabel` | `function\|null` | `null` | Custom label resolver: `(item, dropdown) => label`. |
+| `renderItem` | `function\|null` | `null` | Returns text or a DOM node for the label area. |
+| `renderRemoveButton` | `function\|null` | `null` | Returns text or a DOM node for the remove button. |
+| `getRemoveButtonAriaLabel` | `string\|function\|null` | `null` | Accessible remove-button label or resolver. |
+| `onRemove` | `function\|null` | `null` | Runs before removal; returning `false` cancels it. |
+| `onChanged` | `function\|null` | `null` | Runs after list changes: `(items, dropdown) => {}`. |
+
+Changes also dispatch the bubbling `dropdown-selection-list-changed` event on the dropdown container.
+
 ## Important Methods (Short Overview)
 
 - `setItems(items, callback?, options?)`: add new entries / re-render
 - `selected()`: get currently selected item
 - `selected(key)`: select item by key
 - `selected(null)`: clear current selection
+- `selectedItems()`: get all integrated selection-list items
+- `setSelectedItems(items)`: replace all integrated selection-list items
+- `addSelectedItem(item)`: add one item unless its key already exists
+- `removeSelectedItem(keyOrItem)`: remove one item by key or item
+- `clearSelectedItems()`: remove all integrated selection-list items
 - `clear(options?)`: clear items/selection in a controlled way
 - `setDisabled(state)`: enable/disable interaction
 - `getInput()`: current visible input text

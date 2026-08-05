@@ -15,6 +15,7 @@ class Dropdown {
     placeholder: '',
     reference: 'toggle',
     required: false,
+    selectionList: false,
     swipe: {
       left: {
         hint: false, // content
@@ -47,11 +48,20 @@ class Dropdown {
 
   toggleLabel = null;
   hiddenInput = null;
+  floatingLabel = null;
   valueKey = null;
+
+  _floatingLabelLayoutTimer = null;
+  _floatingLabelLeft = 0;
+  _selectionInputPlaceholder = '';
 
   #itemsRendered = true;
 
   #listjs;
+
+  #selectionItems = new Map();
+
+  #selectionListOptions;
 
   /**
    * @callback itemSelectedCallback
@@ -90,6 +100,7 @@ class Dropdown {
    * @param {string|Element|object} options.reference Bootstrap reference used to position the menu. Default: toggle
    * @param {boolean} options.required Set to true if the value required for a form
    * @param {boolean} options.disabled Set to true if the dropdown should disabled
+   * @param {boolean|object} options.selectionList Enables an integrated list for multiple selected items
    * @param {itemSelectedCallback} options.onSelected Runs code after selection a menu entry
    * @param {inputCallback} options.onInput Runs an additional code on input
    * @param {object} options.swipe Object to descripe swipe actions
@@ -110,6 +121,7 @@ class Dropdown {
     this.options.autoselectsingle = this.options.autoselectsingle !== false;
     this.options.caret = this.options.caret !== false;
     this.options.filter = this.options.filter !== false;
+    this.#selectionListOptions = this.#normalizeSelectionListOptions(this.options.selectionList);
     this.valueKey = this.options.valueKey ?? this.#detectValueKey();
     this.items = this.options.items;
 
@@ -209,6 +221,7 @@ class Dropdown {
     if (this._onDocPointerDown) {
       try { document.removeEventListener('pointerdown', this._onDocPointerDown, { capture: true }); } catch { /* empty */ }
     }
+    if (this._floatingLabelLayoutTimer !== null) clearTimeout(this._floatingLabelLayoutTimer);
     this.#stopMenuViewportTracking();
 
     try { $input.off(ns); } catch { /* empty */ }
@@ -233,14 +246,21 @@ class Dropdown {
     this.toggle = null;
     this.toggleLabel = null;
     this.hiddenInput = null;
+    this.floatingLabel = null;
+    this.selectionList = null;
     this.container = null;
     this.items = {};
+    this.#selectionItems.clear();
+    this.#selectionListOptions = null;
     this.options = {};
     this.dd = null;
 
     this._onDocPointerDown = null;
     this._onMenuViewportChange = null;
     this._menuLayoutFrame = null;
+    this._floatingLabelLayoutTimer = null;
+    this._floatingLabelLeft = 0;
+    this._selectionInputPlaceholder = '';
     this._ns = null;
     this.#itemsRendered = false;
   }
@@ -263,9 +283,97 @@ class Dropdown {
 
   setDisabled = state => {
     let hiddenInput = this.hiddenInput ?? this.container.querySelector('input[type=hidden]');
+    this.options.disabled = state;
     this.toggle.disabled = state;
     if (hiddenInput) hiddenInput.disabled = state;
     if (this.ddInput) this.ddInput.disabled = state;
+    this.selectionList?.querySelectorAll('button').forEach(button => {
+      button.disabled = state;
+    });
+  };
+
+  /**
+   * Return all items currently displayed in the integrated selection list.
+   * @returns {Array<*>} Selected items in insertion order.
+   */
+  selectedItems = () => Array.from(this.#selectionItems.values());
+
+  /**
+   * Replace all items in the integrated selection list.
+   * @param {Array<*>|Object} items Items to display.
+   * @returns {Array<*>} The normalized selected items.
+   */
+  setSelectedItems = (items = []) => {
+    if (!this.#selectionListOptions?.enabled) return [];
+
+    const sourceItems = Array.isArray(items)
+      ? items
+      : (items && typeof items === 'object' ? Object.values(items) : []);
+
+    this.#selectionItems.clear();
+    sourceItems.forEach((item, index) => {
+      const key = this.#resolveSelectionItemKey(item, index);
+      if (key !== null && !this.#selectionItems.has(key)) {
+        this.#selectionItems.set(key, item);
+      }
+    });
+
+    this.#renderSelectionList();
+    this.#notifySelectionListChanged();
+    return this.selectedItems();
+  };
+
+  /**
+   * Append one item to the integrated selection list.
+   * @param {*} item Item to display.
+   * @returns {boolean} True when the item was added.
+   */
+  addSelectedItem = item => {
+    if (!this.#selectionListOptions?.enabled) return false;
+
+    const key = this.#resolveSelectionItemKey(item, this.#selectionItems.size);
+    if (key === null || this.#selectionItems.has(key)) return false;
+
+    this.#selectionItems.set(key, item);
+    this.#renderSelectionList();
+    this.#notifySelectionListChanged();
+    return true;
+  };
+
+  /**
+   * Remove one item from the integrated selection list.
+   * @param {string|number|*} keyOrItem Item key or item object to remove.
+   * @returns {boolean} True when the item was removed.
+   */
+  removeSelectedItem = keyOrItem => {
+    if (!this.#selectionListOptions?.enabled) return false;
+
+    const directKey = this.#normalizeSelectionItemKey(keyOrItem);
+    const key = this.#selectionItems.has(directKey)
+      ? directKey
+      : this.#resolveSelectionItemKey(keyOrItem);
+    if (key === null || !this.#selectionItems.has(key)) return false;
+
+    const item = this.#selectionItems.get(key);
+    if (this.#selectionListOptions.onRemove?.(item, this) === false) return false;
+
+    this.#selectionItems.delete(key);
+    this.#renderSelectionList();
+    this.#notifySelectionListChanged();
+    return true;
+  };
+
+  /**
+   * Remove all items from the integrated selection list.
+   * @returns {boolean} True when at least one item was removed.
+   */
+  clearSelectedItems = () => {
+    if (!this.#selectionListOptions?.enabled || this.#selectionItems.size === 0) return false;
+
+    this.#selectionItems.clear();
+    this.#renderSelectionList();
+    this.#notifySelectionListChanged();
+    return true;
   };
 
   setItems = (items, callback, options = {}) => {
@@ -737,6 +845,237 @@ class Dropdown {
     this._menuLayoutVersion++;
   };
 
+  /**
+   * Normalize the optional integrated selection-list configuration.
+   * @param {boolean|Object} options Raw selection-list option.
+   * @returns {Object} Complete selection-list configuration.
+   */
+  #normalizeSelectionListOptions = options => {
+    const enabled = options === true || (options && typeof options === 'object' && options.enabled !== false);
+    const config = options && typeof options === 'object' ? options : {};
+
+    return {
+      enabled,
+      containerClass: 'dropdown-selection-list input-group-text d-flex flex-wrap align-items-center gap-2 '
+        + (this.options.floatingbox ? 'pt-3 pb-1' : 'py-1'),
+      itemClass: 'badge text-bg-secondary d-inline-flex align-items-center gap-2',
+      labelClass: 'dropdown-selection-label',
+      removeButtonClass: 'btn btn-sm p-0 border-0 text-reset lh-1',
+      removeButtonText: '×',
+      itemTag: 'span',
+      placement: 'before-input',
+      valueKey: 'key',
+      labelKey: 'label',
+      titleKey: null,
+      renderItem: null,
+      renderRemoveButton: null,
+      getKey: null,
+      getLabel: null,
+      getRemoveButtonAriaLabel: null,
+      onRemove: null,
+      onChanged: null,
+      ...config,
+      enabled
+    };
+  };
+
+  /**
+   * Convert a primitive selection-list key into its stable string representation.
+   * @param {*} value Candidate key.
+   * @returns {string|null} Normalized key or null.
+   */
+  #normalizeSelectionItemKey = value => {
+    if (![ 'string', 'number', 'bigint' ].includes(typeof value)) return null;
+    const key = String(value).trim();
+    return key === '' ? null : key;
+  };
+
+  /**
+   * Resolve the stable key for one integrated selection-list item.
+   * @param {*} item Selected item.
+   * @param {number} fallbackIndex Optional index for primitive fallback values.
+   * @returns {string|null} Stable item key or null.
+   */
+  #resolveSelectionItemKey = (item, fallbackIndex = undefined) => {
+    const config = this.#selectionListOptions;
+    const customKey = typeof config?.getKey === 'function'
+      ? config.getKey(item, this)
+      : undefined;
+    const candidates = [ customKey ];
+
+    if (item && typeof item === 'object') {
+      if (config?.valueKey) candidates.push(item[config.valueKey]);
+      candidates.push(item.key, item.id, item.value);
+    } else {
+      candidates.push(item);
+    }
+
+    if (fallbackIndex !== undefined) candidates.push(fallbackIndex);
+
+    for (const candidate of candidates) {
+      const key = this.#normalizeSelectionItemKey(candidate);
+      if (key !== null) return key;
+    }
+
+    return null;
+  };
+
+  /**
+   * Resolve the visible text for one integrated selection-list item.
+   * @param {*} item Selected item.
+   * @param {string} key Stable item key.
+   * @returns {string} Visible item label.
+   */
+  #resolveSelectionItemLabel = (item, key) => {
+    const config = this.#selectionListOptions;
+    const customLabel = typeof config?.getLabel === 'function'
+      ? config.getLabel(item, this)
+      : undefined;
+    const candidates = [ customLabel ];
+
+    if (item && typeof item === 'object') {
+      if (config?.labelKey) candidates.push(item[config.labelKey]);
+      candidates.push(item.label, item.description, item.name);
+    } else {
+      candidates.push(item);
+    }
+    candidates.push(key);
+
+    const label = candidates.find(value => value !== undefined && value !== null && String(value).trim() !== '');
+    return label === undefined ? '' : String(label).trim();
+  };
+
+  /**
+   * Create one remove button for the integrated selection list.
+   * @param {*} item Selected item.
+   * @param {string} key Stable item key.
+   * @param {string} label Visible item label.
+   * @returns {HTMLButtonElement} Configured remove button.
+   */
+  #createSelectionRemoveButton = (item, key, label) => {
+    const config = this.#selectionListOptions;
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = config.removeButtonClass ?? '';
+    removeButton.disabled = Boolean(this.options.disabled);
+
+    const customAriaLabel = typeof config.getRemoveButtonAriaLabel === 'function'
+      ? config.getRemoveButtonAriaLabel(item, this)
+      : config.getRemoveButtonAriaLabel;
+    removeButton.setAttribute('aria-label', String(customAriaLabel || `Remove ${label}`));
+
+    const rendered = typeof config.renderRemoveButton === 'function'
+      ? config.renderRemoveButton(item, { key, label, dropdown: this })
+      : config.removeButtonText;
+    if (typeof Node !== 'undefined' && rendered instanceof Node) {
+      removeButton.appendChild(rendered);
+    } else {
+      removeButton.textContent = rendered === undefined || rendered === null ? '' : String(rendered);
+    }
+
+    removeButton.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.removeSelectedItem(key);
+    });
+
+    return removeButton;
+  };
+
+  /**
+   * Render the current integrated selection-list state.
+   */
+  #renderSelectionList = () => {
+    const config = this.#selectionListOptions;
+    if (!config?.enabled || !this.selectionList || !this.container) return;
+
+    this.selectionList.replaceChildren();
+
+    this.#selectionItems.forEach((item, key) => {
+      const label = this.#resolveSelectionItemLabel(item, key);
+      const tagName = /^[a-z][a-z0-9-]*$/i.test(String(config.itemTag ?? ''))
+        ? String(config.itemTag)
+        : 'span';
+      const itemElement = document.createElement(tagName);
+      itemElement.className = config.itemClass ?? '';
+      itemElement.dataset.selectionKey = key;
+
+      if (config.titleKey && item && typeof item === 'object' && item[config.titleKey] != null) {
+        itemElement.title = String(item[config.titleKey]);
+      }
+
+      const labelElement = document.createElement('span');
+      labelElement.className = config.labelClass ?? '';
+      const rendered = typeof config.renderItem === 'function'
+        ? config.renderItem(item, { key, label, dropdown: this })
+        : label;
+      if (typeof Node !== 'undefined' && rendered instanceof Node) {
+        labelElement.appendChild(rendered);
+      } else {
+        labelElement.textContent = rendered === undefined || rendered === null ? '' : String(rendered);
+      }
+
+      itemElement.appendChild(labelElement);
+      itemElement.appendChild(this.#createSelectionRemoveButton(item, key, label));
+      this.selectionList.appendChild(itemElement);
+    });
+
+    if (this.#selectionItems.size === 0) {
+      this.selectionList.remove();
+      this.#syncSelectionListInputState();
+      return;
+    }
+
+    const anchor = config.placement === 'after-input'
+      ? (this.ddInput?.nextSibling ?? this.hiddenInput ?? this.toggle)
+      : (this.ddInput ?? this.hiddenInput ?? this.toggle);
+    this.container.insertBefore(this.selectionList, anchor);
+    this.#syncSelectionListInputState();
+  };
+
+  /**
+   * Keep the floating-label state in sync with the integrated selection list.
+   */
+  #syncSelectionListInputState = () => {
+    const hasSelection = this.#selectionItems.size > 0;
+    this.container?.classList.toggle('dropdown-has-selection', hasSelection);
+
+    if (!this.options.floatingbox || !this.ddInput) return;
+
+    if (hasSelection) {
+      if (this.ddInput.hasAttribute('placeholder')) {
+        this._selectionInputPlaceholder = this.ddInput.getAttribute('placeholder') ?? '';
+      }
+      this.ddInput.removeAttribute('placeholder');
+      return;
+    }
+
+    this.ddInput.setAttribute('placeholder', this._selectionInputPlaceholder || this.options.placeholder || ' ');
+  };
+
+  /**
+   * Apply the stable leading offset captured before selected items move the search input.
+   */
+  #positionFloatingLabel = () => {
+    if (!this.floatingLabel) return;
+    this.floatingLabel.style.left = `${this._floatingLabelLeft}px`;
+    this.floatingLabel.style.zIndex = '10';
+  };
+
+  /**
+   * Notify callbacks and DOM consumers after the integrated selection list changes.
+   */
+  #notifySelectionListChanged = () => {
+    if (!this.container) return;
+
+    const items = this.selectedItems();
+    this.#selectionListOptions?.onChanged?.(items, this);
+    this.container.dispatchEvent(new CustomEvent('dropdown-selection-list-changed', {
+      bubbles: true,
+      detail: { items, dropdown: this }
+    }));
+  };
+
   #prepareContainer = () => {
 
     let hiddenInput = document.createElement('input'),
@@ -760,6 +1099,13 @@ class Dropdown {
     this.ul = document.createElement('ul');
     this.toggle = document.createElement('button');
     this.toggleLabel = null;
+    this.floatingLabel = null;
+    if (this.#selectionListOptions.enabled) {
+      this.selectionList = document.createElement('div');
+      this.selectionList.className = this.#selectionListOptions.containerClass ?? '';
+    } else {
+      this.selectionList = null;
+    }
 
     hiddenInput.name = this.id;
     hiddenInput.type = 'hidden';
@@ -830,8 +1176,16 @@ class Dropdown {
     this.container.appendChild(this.ul);
 
     if (this.options.filter && this.options.floatingbox && this.ddInput) {
-      setTimeout(() => label.style = 'left: ' + this.ddInput.offsetLeft + 'px; z-index: 10', 350);
-      label.style = 'left: ' + this.ddInput.offsetLeft + 'px; z-index: 10';
+      this.floatingLabel = label;
+      this._floatingLabelLeft = this.ddInput.offsetLeft;
+      this._selectionInputPlaceholder = this.ddInput.getAttribute('placeholder') ?? '';
+      this.#positionFloatingLabel();
+      this._floatingLabelLayoutTimer = setTimeout(() => {
+        this._floatingLabelLayoutTimer = null;
+        if (!this.ddInput || !this.floatingLabel) return;
+        if (this.#selectionItems.size === 0) this._floatingLabelLeft = this.ddInput.offsetLeft;
+        this.#positionFloatingLabel();
+      }, 350);
     }
 
     this.#updateDisplay(this.selected()?.description ?? '');
