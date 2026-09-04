@@ -677,7 +677,12 @@ class Dropdown {
     }
 
     const placeholder = this.options.placeholder ?? '';
-    const displayValue = value !== '' ? value : (placeholder !== '' ? placeholder : ' ');
+    const hasFloatingButton = this.options.bootstrapmajor == 5
+      && this.options.floatingbox
+      && !this.options.filter;
+    const displayValue = value !== ''
+      ? value
+      : (!hasFloatingButton && placeholder !== '' ? placeholder : ' ');
     if (this.toggleLabel) {
 
       this.toggleLabel.innerHTML = '';
@@ -1083,6 +1088,9 @@ class Dropdown {
       // bootstrap4buttonwrapper = document.createElement('div'),
       span = document.createElement('span'),
       bs = (this.options.bootstrapmajor == 5 ? 'bs-' : '');
+    const hasFloatingButton = this.options.bootstrapmajor == 5
+      && this.options.floatingbox
+      && !this.options.filter;
 
     if (this.options.filter) {
       this.ddInput = document.createElement('input');
@@ -1118,15 +1126,25 @@ class Dropdown {
     if (this.options.filter && this.ddInput) {
       label.setAttribute('for', this.id + '-input');
       label.innerHTML = this.options.placeholder;
+    } else if (hasFloatingButton) {
+      label.setAttribute('for', this.id + '-toggle');
+      label.innerHTML = this.options.placeholder;
     }
 
     this.toggle.type = 'button';
     let toggleClasses = 'btn '
-      + (this.options.caret ? 'dropdown-toggle ' : '')
+      + (this.options.caret && !hasFloatingButton ? 'dropdown-toggle ' : '')
       + (this.options.filter ? 'dropdown-toggle-split ' : '')
       + (this.options.bootstrapmajor == 4 ? ' flex-grow-0 flex-shrink-0 ' : '')
       + this.options.buttonstyle;
     this.toggle.className = toggleClasses.trim();
+    if (hasFloatingButton) {
+      this.toggle.id = this.id + '-toggle';
+      this.toggle.classList.add('form-select', 'text-start');
+      if (!this.options.caret) {
+        this.toggle.style.setProperty('--bs-form-select-bg-img', 'none');
+      }
+    }
     this.toggle.setAttribute('data-' + bs + 'toggle', 'dropdown');
     this.toggle.setAttribute('aria-expanded', 'false');
     this.toggle.disabled = this.options.disabled;
@@ -1157,7 +1175,8 @@ class Dropdown {
       this.container.classList.add('input-group', 'dropdown-text');
       if (this.options.floatingbox) this.container.classList.add('form-floating');
     } else {
-      this.container.classList.remove('input-group', 'dropdown-text', 'form-floating');
+      this.container.classList.remove('input-group', 'dropdown-text');
+      this.container.classList.toggle('form-floating', hasFloatingButton);
     }
     if (this.options.bootstrapmajor == 4) {
       this.container.classList.add('btn-group');
@@ -1173,6 +1192,10 @@ class Dropdown {
     if (this.options.filter && this.options.floatingbox)
       this.container.appendChild(label);
     this.container.appendChild(this.toggle);
+    if (hasFloatingButton) {
+      this.container.appendChild(label);
+      this.floatingLabel = label;
+    }
     this.container.appendChild(this.ul);
 
     if (this.options.filter && this.options.floatingbox && this.ddInput) {

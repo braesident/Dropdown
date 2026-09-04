@@ -99,13 +99,13 @@ const dd = new Dropdown('exampleDropdown', {
 | `buttonstyle` | `string` | `'btn-outline-secondary'` | Extra classes on the toggle button. |
 | `caret` | `boolean` | `true` | Shows/hides the caret on the button (`false` disables it). |
 | `disabled` | `boolean` | `false` | Disables input, toggle, and hidden input. |
-| `floatingbox` | `boolean` | `false` | Enables Bootstrap floating-label behavior (with `filter: true`). |
+| `floatingbox` | `boolean` | `false` | Enables Bootstrap floating-label behavior. With Bootstrap 5 and `filter: false`, the button uses `.form-select` and keeps the placeholder in the floated label. |
 | `items` | `object` | `{}` | Initial entries. Keys become `data-value` / hidden-input value. |
 | `listjs` | `boolean` | `false` | Enables List.js mode instead of native menu rendering. |
 | `filter` | `boolean` | `true` | Enables/disables searchable input (`false` = button label only). |
 | `menumaxheight` | `string` | `'300px'` | Menu max-height (inline style). |
 | `menustyle` | `string` | `''` | Additional inline style for the menu. |
-| `placeholder` | `string` | `''` | Placeholder for search input or label placeholder when `filter: false`. |
+| `placeholder` | `string` | `''` | Placeholder for the search input, the filterless button, or its floated label. |
 | `required` | `boolean` | `false` | Sets `required` on the search input. |
 | `selectionList` | `boolean\|object` | `false` | Enables an integrated, configurable list for multiple selected items. Passing an object enables it unless `enabled: false` is set. |
 | `swipe.left.hint` | `string\|false` | `false` | HTML hint for left swipe (for example an icon). |
