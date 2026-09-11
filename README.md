@@ -65,7 +65,7 @@ const dd = new Dropdown('exampleDropdown', {
   items: {},
   listjs: false,
   filter: true,
-  menumaxheight: '300px',
+  menumaxheight: 'auto',
   menustyle: '',
   placeholder: '',
   required: false,
@@ -103,7 +103,7 @@ const dd = new Dropdown('exampleDropdown', {
 | `items` | `object` | `{}` | Initial entries. Keys become `data-value` / hidden-input value. |
 | `listjs` | `boolean` | `false` | Enables List.js mode instead of native menu rendering. |
 | `filter` | `boolean` | `true` | Enables/disables searchable input (`false` = button label only). |
-| `menumaxheight` | `string` | `'300px'` | Menu max-height (inline style). |
+| `menumaxheight` | `string` | `'auto'` | Dynamically uses the available viewport height. Placement prefers below, then above, then a side; 300px is used as the preferred placement height. Set a CSS length such as `'300px'` for a fixed limit. |
 | `menustyle` | `string` | `''` | Additional inline style for the menu. |
 | `placeholder` | `string` | `''` | Placeholder for the search input, the filterless button, or its floated label. |
 | `required` | `boolean` | `false` | Sets `required` on the search input. |

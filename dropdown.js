@@ -59,6 +59,10 @@ class Dropdown {
 
   #listjs;
 
+  #automaticMenuPlacementHeight = 300;
+
+  #menuViewportPadding = 8;
+
   #selectionItems = new Map();
 
   #selectionListOptions;
@@ -712,27 +716,159 @@ class Dropdown {
   );
 
   /**
-   * Resolve the element used by Bootstrap as the Popper reference.
-   * @returns {Element|null} The reference element used for height calculations.
+   * Resolve the visible viewport with a small safe area for borders and shadows.
+   * @returns {{top: number, right: number, bottom: number, left: number, width: number, height: number, padding: number}}
+   * Viewport dimensions in CSS pixels.
    */
-  #getMenuReferenceElement = () => {
-    const reference = this.options.reference;
+  #getMenuViewportRect = () => {
+    const visualViewport = window.visualViewport;
+    const rawTop = visualViewport?.offsetTop ?? 0;
+    const rawLeft = visualViewport?.offsetLeft ?? 0;
+    const rawHeight = visualViewport?.height ?? document.documentElement.clientHeight;
+    const rawWidth = visualViewport?.width ?? document.documentElement.clientWidth;
+    const padding = Math.min(
+      this.#menuViewportPadding,
+      Math.max(0, rawHeight / 2),
+      Math.max(0, rawWidth / 2)
+    );
+    const top = rawTop + padding;
+    const left = rawLeft + padding;
+    const height = Math.max(0, rawHeight - (padding * 2));
+    const width = Math.max(0, rawWidth - (padding * 2));
 
-    if (reference === 'parent') return this.container;
-    if (reference && typeof reference.getBoundingClientRect === 'function') return reference;
-    if (reference?.contextElement && typeof reference.contextElement.getBoundingClientRect === 'function') {
-      return reference.contextElement;
-    }
-
-    return this.toggle;
+    return {
+      top,
+      right: left + width,
+      bottom: top + height,
+      left,
+      width,
+      height,
+      padding
+    };
   };
 
   /**
-   * Remove a previous automatic height limit before Popper chooses a placement.
+   * Build a prioritized Popper fallback list for automatic menu positioning.
+   * @param {string} initialPlacement Placement selected by Bootstrap.
+   * @returns {string[]} Ordered fallback placements.
+   */
+  #getAutomaticFallbackPlacements = initialPlacement => {
+    const [ side, variation ] = String(initialPlacement ?? 'bottom-start').split('-');
+    const suffix = variation ? `-${variation}` : '';
+    const alternativeSuffix = variation === 'start'
+      ? '-end'
+      : (variation === 'end' ? '-start' : '');
+    const verticalOpposite = side === 'top' ? 'bottom' : 'top';
+    const horizontalOpposite = side === 'left' ? 'right' : 'left';
+    const candidates = [ 'top', 'bottom' ].includes(side)
+      ? [
+        verticalOpposite + suffix,
+        verticalOpposite + alternativeSuffix,
+        'right' + suffix,
+        'right' + alternativeSuffix,
+        'left' + suffix,
+        'left' + alternativeSuffix
+      ]
+      : [
+        horizontalOpposite + suffix,
+        horizontalOpposite + alternativeSuffix,
+        'bottom' + suffix,
+        'bottom' + alternativeSuffix,
+        'top' + suffix,
+        'top' + alternativeSuffix
+      ];
+
+    return [ ...new Set(candidates) ].filter(placement => placement && placement !== initialPlacement);
+  };
+
+  /**
+   * Keep Bootstrap 5 / Popper 2 menus inside the viewport and enable side fallbacks.
+   * @param {Object} defaultConfig Bootstrap's default Popper configuration.
+   * @returns {Object} Extended Popper configuration.
+   */
+  #getAutomaticPopperConfig = (defaultConfig = {}) => {
+    if (!this.#usesAutomaticMenuHeight()) return defaultConfig;
+
+    const placement = defaultConfig.placement ?? 'bottom-start';
+    const modifiers = Array.isArray(defaultConfig.modifiers)
+      ? defaultConfig.modifiers.map(modifier => ({
+        ...modifier,
+        options: modifier.options ? { ...modifier.options } : modifier.options
+      }))
+      : [];
+    const setModifier = (name, options) => {
+      const index = modifiers.findIndex(modifier => modifier.name === name);
+      const current = index >= 0 ? modifiers[index] : { name };
+      const modifier = {
+        ...current,
+        enabled: true,
+        options: {
+          ...(current.options ?? {}),
+          ...options
+        }
+      };
+
+      if (index >= 0) modifiers[index] = modifier;
+      else modifiers.push(modifier);
+    };
+
+    setModifier('flip', {
+      boundary: 'viewport',
+      rootBoundary: 'viewport',
+      padding: this.#menuViewportPadding,
+      fallbackPlacements: this.#getAutomaticFallbackPlacements(placement),
+      fallbackStrategy: 'bestFit',
+      flipVariations: true
+    });
+    setModifier('preventOverflow', {
+      boundary: 'viewport',
+      rootBoundary: 'viewport',
+      padding: this.#menuViewportPadding,
+      altAxis: true,
+      tether: false
+    });
+
+    return {
+      ...defaultConfig,
+      placement,
+      modifiers
+    };
+  };
+
+  /**
+   * Keep Bootstrap 4 / Popper 1 menus inside the viewport and enable side fallbacks.
+   * @returns {Object|null} Popper configuration or null for fixed menu heights.
+   */
+  #getBootstrap4AutomaticPopperConfig = () => {
+    if (!this.#usesAutomaticMenuHeight()) return null;
+
+    return {
+      modifiers: {
+        offset: {
+          offset: 0
+        },
+        flip: {
+          enabled: true,
+          behavior: [ 'bottom-start', 'top-start', 'right-start', 'left-start' ],
+          boundariesElement: 'viewport',
+          padding: this.#menuViewportPadding
+        },
+        preventOverflow: {
+          boundariesElement: 'viewport',
+          padding: this.#menuViewportPadding
+        }
+      }
+    };
+  };
+
+  /**
+   * Apply the preferred placement height before Popper chooses a direction.
    */
   #resetAutomaticMenuHeight = () => {
     if (this.ul && this.#usesAutomaticMenuHeight()) {
-      this.ul.style.maxHeight = 'none';
+      const viewport = this.#getMenuViewportRect();
+      const placementHeight = Math.min(this.#automaticMenuPlacementHeight, viewport.height);
+      this.ul.style.maxHeight = `${Math.floor(placementHeight)}px`;
       this.ul.style.overflowY = 'auto';
     }
   };
@@ -743,33 +879,29 @@ class Dropdown {
   #applyAutomaticMenuHeight = () => {
     if (!this.ul || !this.#usesAutomaticMenuHeight()) return;
 
-    const reference = this.#getMenuReferenceElement();
-    if (!reference) return;
-
-    const referenceRect = reference.getBoundingClientRect();
+    const viewport = this.#getMenuViewportRect();
     const menuRect = this.ul.getBoundingClientRect();
-    const visualViewport = window.visualViewport;
-    const viewportTop = visualViewport?.offsetTop ?? 0;
-    const viewportHeight = visualViewport?.height ?? document.documentElement.clientHeight;
-    const viewportBottom = viewportTop + viewportHeight;
     const placement = this.ul.getAttribute('data-popper-placement')
+      ?? this.ul.getAttribute('x-placement')
       ?? this.dd?._popper?.state?.placement
       ?? 'bottom-start';
     const side = placement.split('-')[0];
-    const spaceAbove = Math.max(0, referenceRect.top - viewportTop);
-    const spaceBelow = Math.max(0, viewportBottom - referenceRect.bottom);
-    const isAbove = side === 'top' || (side !== 'bottom' && spaceAbove > spaceBelow);
-    const gap = isAbove
-      ? Math.max(0, referenceRect.top - menuRect.bottom)
-      : Math.max(0, menuRect.top - referenceRect.bottom);
-    const availableHeight = Math.max(0, Math.floor((isAbove ? spaceAbove : spaceBelow) - gap));
+    let availableHeight = viewport.height;
+
+    if (side === 'top') {
+      availableHeight = Math.min(menuRect.bottom, viewport.bottom) - viewport.top;
+    } else if (side === 'bottom') {
+      availableHeight = viewport.bottom - Math.max(menuRect.top, viewport.top);
+    }
+
+    availableHeight = Math.max(0, Math.min(viewport.height, Math.floor(availableHeight)));
 
     this.ul.style.maxHeight = `${availableHeight}px`;
     this.ul.style.overflowY = 'auto';
   };
 
   /**
-   * Restore the menu scroll position after temporarily removing its height limit.
+   * Restore the menu scroll position after temporarily applying the placement height.
    * @param {number} scrollTop Scroll position captured before the layout refresh.
    */
   #restoreMenuScrollPosition = scrollTop => {
@@ -791,21 +923,30 @@ class Dropdown {
 
     const layoutVersion = ++this._menuLayoutVersion;
     const popper = this.dd?._popper;
+    const updatePopper = typeof popper?.update === 'function'
+      ? () => popper.update()
+      : (typeof popper?.scheduleUpdate === 'function'
+        ? () => new Promise(resolve => {
+          popper.scheduleUpdate();
+          requestAnimationFrame(resolve);
+        })
+        : null);
     const scrollTop = this.ul.scrollTop;
     this.#resetAutomaticMenuHeight();
 
-    if (!popper?.update) {
+    if (!updatePopper) {
       this.#applyAutomaticMenuHeight();
       this.#restoreMenuScrollPosition(scrollTop);
       return;
     }
 
-    Promise.resolve(popper.update())
+    Promise.resolve()
+      .then(() => updatePopper())
       .then(() => {
         if (layoutVersion !== this._menuLayoutVersion || !this.ul) return null;
         this.#applyAutomaticMenuHeight();
         this.#restoreMenuScrollPosition(scrollTop);
-        return popper.update();
+        return updatePopper();
       })
       .then(() => {
         if (layoutVersion === this._menuLayoutVersion && this.ul) {
@@ -1244,14 +1385,17 @@ class Dropdown {
     if (wbs?.Dropdown?.getOrCreateInstance) {           // Bootstrap 5+
       this.dd = wbs.Dropdown.getOrCreateInstance(this.toggle, {
         autoClose: false,
-        reference: this.options.reference
+        boundary: this.#usesAutomaticMenuHeight() ? 'viewport' : 'clippingParents',
+        reference: this.options.reference,
+        popperConfig: defaultConfig => this.#getAutomaticPopperConfig(defaultConfig)
       });
     } else if (wbs?.Dropdown) {                         // Bootstrap 4.x fallback
       this.dd = $(this.toggle).data('bs.dropdown') ?? wbs.Dropdown.getInstance?.(this.toggle);
       if (!this.dd) {
         this.dd = new wbs.Dropdown(this.toggle, {
           boundary: 'viewport',   // Position sauber
-          reference: this.options.reference
+          reference: this.options.reference,
+          popperConfig: this.#getBootstrap4AutomaticPopperConfig()
         });
         $(this.toggle).data('bs.dropdown', this.dd);
       }
