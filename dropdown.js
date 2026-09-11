@@ -769,6 +769,17 @@ class Dropdown {
   };
 
   /**
+   * Restore the menu scroll position after temporarily removing its height limit.
+   * @param {number} scrollTop Scroll position captured before the layout refresh.
+   */
+  #restoreMenuScrollPosition = scrollTop => {
+    if (!this.ul || !Number.isFinite(scrollTop) || scrollTop <= 0) return;
+
+    const maximumScrollTop = Math.max(0, this.ul.scrollHeight - this.ul.clientHeight);
+    this.ul.scrollTop = Math.min(scrollTop, maximumScrollTop);
+  };
+
+  /**
    * Recalculate Popper placement and apply the matching automatic height limit.
    */
   #refreshAutomaticMenuHeight = () => {
@@ -780,10 +791,12 @@ class Dropdown {
 
     const layoutVersion = ++this._menuLayoutVersion;
     const popper = this.dd?._popper;
+    const scrollTop = this.ul.scrollTop;
     this.#resetAutomaticMenuHeight();
 
     if (!popper?.update) {
       this.#applyAutomaticMenuHeight();
+      this.#restoreMenuScrollPosition(scrollTop);
       return;
     }
 
@@ -791,11 +804,13 @@ class Dropdown {
       .then(() => {
         if (layoutVersion !== this._menuLayoutVersion || !this.ul) return null;
         this.#applyAutomaticMenuHeight();
+        this.#restoreMenuScrollPosition(scrollTop);
         return popper.update();
       })
       .then(() => {
         if (layoutVersion === this._menuLayoutVersion && this.ul) {
           this.#applyAutomaticMenuHeight();
+          this.#restoreMenuScrollPosition(scrollTop);
         }
       })
       .catch(() => { /* Popper may be disposed while an update is pending. */ });
@@ -819,7 +834,15 @@ class Dropdown {
   #startMenuViewportTracking = () => {
     if (!this.#usesAutomaticMenuHeight() || this._onMenuViewportChange) return;
 
-    this._onMenuViewportChange = () => {
+    this._onMenuViewportChange = event => {
+      // The capturing window listener also receives scroll events from the menu itself.
+      // Refreshing here would remove max-height temporarily and reset the menu scroll position.
+      if (
+        event?.type === 'scroll'
+        && event.target instanceof Node
+        && this.ul?.contains(event.target)
+      ) return;
+
       if (this._menuLayoutFrame !== null) cancelAnimationFrame(this._menuLayoutFrame);
       this._menuLayoutFrame = requestAnimationFrame(() => {
         this._menuLayoutFrame = null;
