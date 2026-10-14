@@ -120,7 +120,10 @@ class DropdownClickSwipe {
         if (li.dataset.swipeOpen !== direction || !allowed(direction)) { this.reset(); return; }
         this.reset();
         // Keep the existing callback contract: false means the application owns removal.
-        if (side.action(event, li) !== false) li.remove();
+        if (side.action(event, li) !== false) {
+          li.remove();
+          dropdown._refreshSwipeHint();
+        }
       });
     }
     if (!Object.keys(hints).length) return false;
@@ -367,6 +370,7 @@ class Dropdown {
     // Native-Variante
       this.items = {};
       if (this.ul) this.ul.innerHTML = '';
+      this._refreshSwipeHint();
     }
 
     // Auswahl / Werte zurücksetzen
@@ -491,6 +495,7 @@ class Dropdown {
     this.selectionList?.querySelectorAll('button').forEach(button => {
       button.disabled = state;
     });
+    this._refreshSwipeHint();
   };
 
   /**
@@ -666,9 +671,9 @@ class Dropdown {
   #fillMenu = () => {
     this._clickSwipe?.dispose();
     this._clickSwipe = this.options.swipe?.trigger === 'click' ? new DropdownClickSwipe(this) : null;
+    this.ul.innerHTML = '';
     if (Object.keys(this.items).length) {
       this.#itemsRendered = false;
-      this.ul.innerHTML = '';
 
       let hasSwipeAction = 0;
       const activeEntries = [];
@@ -771,7 +776,7 @@ class Dropdown {
               wasDragged = true;
             }
           });
-          document.addEventListener('mouseup', function (e) {
+          document.addEventListener('mouseup', e => {
             if (!dragging) return;
 
             li.style.transition = '';
@@ -789,7 +794,10 @@ class Dropdown {
               if (action(e, li) !== false) {
                 li.style.transform = `translateX(${isLeft ? '-' : ''}120%)`;
                 li.classList.add('removing');
-                setTimeout(() => li.remove(), 300);
+                setTimeout(() => {
+                  li.remove();
+                  this._refreshSwipeHint();
+                }, 300);
               } else {
                 li.style.transform = '';
               }
@@ -823,7 +831,7 @@ class Dropdown {
       if (hasSwipeAction) {
         let div = document.createElement('div'),
           code = document.createElement('code');
-        div.classList.add('text-center');
+        div.classList.add('text-center', 'dropdown-swipe-hint');
         code.innerText = this._clickSwipe ? 'Wischen, dann Symbol anklicken' : 'Swipe für Aktion';
         code.style.fontSize = '0.6rem';
         code.classList.add('cursor-default');
@@ -836,6 +844,28 @@ class Dropdown {
         this.container.dispatchEvent(new CustomEvent('dropdown-items-rendered', { bubbles: true }));
       }, 350);
     }
+    this._refreshSwipeHint();
+  };
+
+  /** Keep gesture instructions tied to the remaining actionable rows. */
+  _refreshSwipeHint = () => {
+    if (!this.ul || this.options.listjs) return;
+    const rows = Array.from(this.ul.children)
+      .filter(row => row.matches('li:not(.d-none):not([hidden]):not(.removing)'));
+    const hasSwipeAction = !this.options.disabled && rows.some(row =>
+      row.querySelector('.dropdown-item:not(:disabled):not(.disabled)') && row.querySelector('.action-hint'));
+    this.ul.querySelector('.dropdown-swipe-hint')?.classList.toggle('d-none', !hasSwipeAction);
+    this.ul.classList.toggle('d-none', rows.length === 0);
+    this.#refreshMenuLayout();
+  };
+
+  #filterNativeMenu = () => {
+    const query = this.ddInput?.value ?? '';
+    this.ul.querySelectorAll('li').forEach(row => {
+      const label = row.querySelector('.dropdown-item')?.textContent?.trim() ?? '';
+      row.classList.toggle('d-none', !label.includes(query));
+    });
+    this._refreshSwipeHint();
   };
 
   #replaceText = e => {
@@ -1674,6 +1704,7 @@ class Dropdown {
         setTimeout(() => e.currentTarget.focus(), 0);
         // Liste sichtbar => reset Filter
         $root.find('.dropdown-menu li').removeClass('d-none');
+        this._refreshSwipeHint();
       });
 
       // Optional: ESC zum Schließen
@@ -1711,6 +1742,7 @@ class Dropdown {
 
       let _autoSelTimer = null;
       $input.on(`input${ns} change${ns}`, e => {
+        if (!this.options.listjs) this.#filterNativeMenu();
         if (this.options.autoselectsingle) {
           clearTimeout(_autoSelTimer);
           _autoSelTimer = setTimeout(() => {
@@ -1722,14 +1754,7 @@ class Dropdown {
 
       // Live-Filter (ohne list.js)
       if (!$menu.hasClass('list')) {
-        $input.on(`keyup${ns} paste${ns}`, e => {
-          $root.find('.dropdown-menu li').removeClass('d-none').each((idx, item) => {
-            if (!$('> *', item).text().trim().includes($(e.currentTarget).val().split(' '))) {
-              $(item).addClass('d-none');
-            }
-          });
-          this.#refreshMenuLayout();
-        });
+        $input.on(`keyup${ns}`, () => this.#filterNativeMenu());
       }
     }, 0);
   };
