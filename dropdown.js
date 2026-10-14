@@ -1,3 +1,188 @@
+/** Handles swipe-to-reveal interactions in Dropdown's native menu. */
+class DropdownClickSwipe {
+  constructor (dropdown) {
+    this.dropdown = dropdown;
+    this.abort = new AbortController();
+    this.openRow = null;
+    this.onHidden = () => this.reset();
+    this.hiddenEvent = `hidden.bs.dropdown.clickSwipe-${dropdown.id}`;
+    $(dropdown.container).on(this.hiddenEvent, this.onHidden);
+    this.listen(document, 'pointerdown', event => {
+      if (this.openRow && !this.openRow.li.contains(event.target)) this.reset();
+    }, { capture: true });
+    this.listen(dropdown.container, 'keydown', event => {
+      if (event.key === 'Escape') this.reset();
+    }, { capture: true });
+    if (dropdown.ddInput) this.listen(dropdown.ddInput, 'input', () => this.reset());
+  }
+
+  listen (element, type, handler, options = {}) {
+    element.addEventListener(type, handler, { ...options, signal: this.abort.signal });
+  }
+
+  reset () {
+    this.openRow?.close();
+    this.openRow = null;
+  }
+
+  dispose () {
+    this.reset();
+    this.abort.abort();
+    $(this.dropdown.container).off(this.hiddenEvent, this.onHidden);
+  }
+
+  bind (idx, item, li, button) {
+    const dropdown = this.dropdown;
+    const width = 48;
+    const hints = {};
+    let offset = 0;
+    let gesture = null;
+    let suppressClick = false;
+    const available = direction => {
+      const side = dropdown.options.swipe[direction];
+      return !button.disabled && side?.hint
+        && typeof side.action === 'function' && (side.condition?.(idx, item, li) ?? true);
+    };
+    const allowed = direction => !dropdown.options.disabled && available(direction);
+    const draw = (value, animate = true) => {
+      offset = value;
+      button.style.transition = animate ? 'transform 150ms ease' : 'none';
+      button.style.transform = value ? `translateX(${value}px)` : '';
+      for (const [ direction, hint ] of Object.entries(hints)) {
+        const visible = direction === (value < 0 ? 'left' : 'right') && value !== 0;
+        hint.style.visibility = visible ? 'visible' : 'hidden';
+        hint.tabIndex = visible && !gesture ? 0 : -1;
+        hint.setAttribute('aria-hidden', String(!visible));
+        hint.style.pointerEvents = visible && !gesture ? 'auto' : 'none';
+        const covered = width - Math.abs(value);
+        hint.style.clipPath = direction === 'left' ? `inset(0 0 0 ${covered}px)` : `inset(0 ${covered}px 0 0)`;
+      }
+    };
+    const row = {
+      li,
+      close: () => {
+        if (Object.values(hints).includes(document.activeElement)) button.focus({ preventScroll: true });
+        const pointerId = gesture?.id;
+        gesture = null;
+        if (pointerId !== undefined && button.hasPointerCapture(pointerId)) button.releasePointerCapture(pointerId);
+        delete li.dataset.swipeOpen;
+        draw(0);
+      }
+    };
+    const reveal = direction => {
+      if (!allowed(direction) || !hints[direction]) { this.reset(); return; }
+      if (this.openRow !== row) this.reset();
+      this.openRow = row;
+      li.dataset.swipeOpen = direction;
+      draw(direction === 'left' ? -width : width);
+      hints[direction].focus({ preventScroll: true });
+    };
+
+    for (const direction of [ 'left', 'right' ]) {
+      if (!available(direction)) continue;
+      const side = dropdown.options.swipe[direction];
+      const hint = document.createElement('button');
+      hint.type = 'button';
+      hint.className = `action-hint btn border-0 rounded-0 position-absolute top-0 h-100 ${direction === 'left' ? 'end-0 text-danger' : 'start-0 text-info'}`;
+      hint.dataset.swipeAction = direction;
+      hint.setAttribute('aria-label', side.label || `Aktion ${direction === 'left' ? 'links' : 'rechts'}`);
+      hint.innerHTML = side.hint;
+      hint.style.width = `${width}px`;
+      hint.style.touchAction = 'manipulation';
+      hints[direction] = hint;
+      li.appendChild(hint);
+      // Confirm a stationary touch on the revealed button. Cancel its synthetic
+      // mouse click before the callback can hide/rebuild the menu underneath it.
+      let tap = null;
+      this.listen(hint, 'touchstart', event => {
+        const touch = event.touches.length === 1 ? event.touches[0] : null;
+        tap = touch ? { id: touch.identifier, x: touch.clientX, y: touch.clientY } : null;
+      }, { passive: true });
+      this.listen(hint, 'touchmove', event => {
+        const touch = event.touches[0];
+        if (!touch || !tap || touch.identifier !== tap.id
+          || Math.hypot(touch.clientX - tap.x, touch.clientY - tap.y) > 10) tap = null;
+      }, { passive: true });
+      this.listen(hint, 'touchcancel', () => { tap = null; });
+      this.listen(hint, 'touchend', event => {
+        const touch = event.changedTouches[0];
+        const confirmed = tap && touch?.identifier === tap.id && !event.touches.length
+          && Math.hypot(touch.clientX - tap.x, touch.clientY - tap.y) <= 10;
+        tap = null;
+        if (confirmed) {
+          event.preventDefault();
+          hint.click();
+        }
+      }, { passive: false });
+      this.listen(hint, 'click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (li.dataset.swipeOpen !== direction || !allowed(direction)) { this.reset(); return; }
+        this.reset();
+        // Keep the existing callback contract: false means the application owns removal.
+        if (side.action(event, li) !== false) li.remove();
+      });
+    }
+    if (!Object.keys(hints).length) return false;
+
+    li.style.overflow = 'hidden';
+    button.style.position = 'relative';
+    button.style.zIndex = '1';
+    button.style.touchAction = 'pan-y';
+    button.style.userSelect = 'none';
+    draw(0, false);
+
+    this.listen(button, 'pointerdown', event => {
+      if (!event.isPrimary || event.button !== 0 || dropdown.options.disabled || button.disabled) return;
+      if (this.openRow !== row) this.reset();
+      this.openRow = row;
+      suppressClick = false;
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, offset, horizontal: false };
+    });
+    this.listen(button, 'pointermove', event => {
+      if (!gesture || event.pointerId !== gesture.id) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      if (!gesture.horizontal) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 10) return;
+        if (Math.abs(dy) >= Math.abs(dx)) { this.reset(); return; }
+        gesture.horizontal = true;
+        if (!button.hasPointerCapture(event.pointerId)) button.setPointerCapture(event.pointerId);
+        suppressClick = true;
+      }
+      const value = Math.max(-width, Math.min(width, gesture.offset + dx));
+      const direction = value < 0 ? 'left' : 'right';
+      draw(hints[direction] && allowed(direction) ? value : 0, false);
+    });
+    this.listen(button, 'pointerup', event => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const horizontal = gesture.horizontal;
+      gesture = null;
+      if (!horizontal) return;
+      if (Math.abs(offset) >= width / 2) reveal(offset < 0 ? 'left' : 'right');
+      else this.reset();
+    });
+    this.listen(button, 'pointercancel', () => this.reset());
+    this.listen(button, 'lostpointercapture', () => { if (gesture) this.reset(); });
+    this.listen(button, 'dragstart', event => event.preventDefault());
+    this.listen(button, 'click', event => {
+      if ((suppressClick && event.detail !== 0) || li.dataset.swipeOpen) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!suppressClick) this.reset();
+        suppressClick = false;
+      }
+    }, { capture: true });
+    this.listen(button, 'keydown', event => {
+      if (![ 'ArrowLeft', 'ArrowRight' ].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      reveal(event.key === 'ArrowLeft' ? 'left' : 'right');
+    });
+    return true;
+  }
+}
+
 class Dropdown {
 
   options = {
@@ -17,14 +202,17 @@ class Dropdown {
     required: false,
     selectionList: false,
     swipe: {
+      trigger: 'swipe', // 'click' reveals the action until its hint is clicked.
       left: {
         hint: false, // content
+        label: '', // accessible action label in click mode
         action: false, // callback
         // eslint-disable-next-line no-unused-vars
         condition: item => true
       },
       right: {
         hint: false,
+        label: '',
         action: false,
         // eslint-disable-next-line no-unused-vars
         condition: item => true
@@ -54,6 +242,7 @@ class Dropdown {
   _floatingLabelLayoutTimer = null;
   _floatingLabelLeft = 0;
   _selectionInputPlaceholder = '';
+  _clickSwipe = null;
 
   #itemsRendered = true;
 
@@ -108,14 +297,17 @@ class Dropdown {
    * @param {itemSelectedCallback} options.onSelected Runs code after selection a menu entry
    * @param {inputCallback} options.onInput Runs an additional code on input
    * @param {object} options.swipe Object to descripe swipe actions
+   * @param {'swipe'|'click'} options.swipe.trigger Trigger on release (default) or reveal a clickable hint. Native menu only.
    * @param {object} options.swipe.left
    * @param {swipeAction} options.swipe.left.action define a callback method for an action
    * @param {swipeCondition} options.swipe.left.condition define a callback method for a condition
    * @param {string} options.swipe.left.hint Add html for hint. e.g. bootstrap-icon
+   * @param {string} options.swipe.left.label Accessible label for the left action in click mode
    * @param {object} options.swipe.right
    * @param {swipeAction} options.swipe.right.action define a callback method for an action
    * @param {swipeCondition} options.swipe.right.condition define a callback method for a condition
    * @param {string} options.swipe.right.hint Add html for hint. e.g. bootstrap-icon
+   * @param {string} options.swipe.right.label Accessible label for the right action in click mode
    */
   constructor (elementselector, options = {}) {
     this.id = elementselector;
@@ -144,6 +336,8 @@ class Dropdown {
   }
 
   clear (options = {}) {
+    this._clickSwipe?.dispose();
+    this._clickSwipe = null;
   // Optionen:
   // resetSelection: Hidden-Value & Auswahl zurücksetzen (default: true)
   // resetInput:     sichtbaren Text im Input leeren (default: true)
@@ -217,6 +411,8 @@ class Dropdown {
   }
 
   dispose () {
+    this._clickSwipe?.dispose();
+    this._clickSwipe = null;
     const ns = this._ns || `.exudd-${this.id}`;
     const $root  = this.id ? $(`#${this.id}`) : $();
     const $input = $root.find('.dropdown-search');
@@ -286,6 +482,7 @@ class Dropdown {
   };
 
   setDisabled = state => {
+    if (state) this._clickSwipe?.reset();
     let hiddenInput = this.hiddenInput ?? this.container.querySelector('input[type=hidden]');
     this.options.disabled = state;
     this.toggle.disabled = state;
@@ -467,6 +664,8 @@ class Dropdown {
   };
 
   #fillMenu = () => {
+    this._clickSwipe?.dispose();
+    this._clickSwipe = this.options.swipe?.trigger === 'click' ? new DropdownClickSwipe(this) : null;
     if (Object.keys(this.items).length) {
       this.#itemsRendered = false;
       this.ul.innerHTML = '';
@@ -520,6 +719,12 @@ class Dropdown {
 
         if (item.active) {
           activeEntries.push({ key: idx, item, button });
+        }
+
+        if (this._clickSwipe) {
+          if (this._clickSwipe.bind(idx, item, li, button)) hasSwipeAction = 1;
+          this.ul.appendChild(li);
+          continue;
         }
 
         let leftSwipeAllowed = this.options?.swipe?.left?.condition(idx, item, li) ?? true;
@@ -619,7 +824,7 @@ class Dropdown {
         let div = document.createElement('div'),
           code = document.createElement('code');
         div.classList.add('text-center');
-        code.innerText = 'Swipe für Aktion';
+        code.innerText = this._clickSwipe ? 'Wischen, dann Symbol anklicken' : 'Swipe für Aktion';
         code.style.fontSize = '0.6rem';
         code.classList.add('cursor-default');
         div.append(code);

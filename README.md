@@ -71,13 +71,16 @@ const dd = new Dropdown('exampleDropdown', {
   required: false,
   selectionList: false,
   swipe: {
+    trigger: 'swipe',
     left: {
       hint: false,
+      label: '',
       action: false,
       condition: (idx, item, li) => true
     },
     right: {
       hint: false,
+      label: '',
       action: false,
       condition: (idx, item, li) => true
     }
@@ -108,11 +111,14 @@ const dd = new Dropdown('exampleDropdown', {
 | `placeholder` | `string` | `''` | Placeholder for the search input, the filterless button, or its floated label. |
 | `required` | `boolean` | `false` | Sets `required` on the search input. |
 | `selectionList` | `boolean\|object` | `false` | Enables an integrated, configurable list for multiple selected items. Passing an object enables it unless `enabled: false` is set. |
+| `swipe.trigger` | `'swipe'\|'click'` | `'swipe'` | Native menu only: execute on swipe release, or reveal an action button that must be clicked/tapped. |
 | `swipe.left.hint` | `string\|false` | `false` | HTML hint for left swipe (for example an icon). |
-| `swipe.left.action` | `function\|false` | `false` | Callback on valid left swipe (`(event, li) => {}`). |
+| `swipe.left.label` | `string` | `''` | Accessible action-button label in click mode; falls back to `Aktion links`. |
+| `swipe.left.action` | `function\|false` | `false` | Callback on valid left swipe or confirmed hint click (`(event, li) => {}`). |
 | `swipe.left.condition` | `function` | `(item) => true` | Condition to allow left swipe (`(idx, item, li) => boolean`). |
 | `swipe.right.hint` | `string\|false` | `false` | HTML hint for right swipe. |
-| `swipe.right.action` | `function\|false` | `false` | Callback on valid right swipe (`(event, li) => {}`). |
+| `swipe.right.label` | `string` | `''` | Accessible action-button label in click mode; falls back to `Aktion rechts`. |
+| `swipe.right.action` | `function\|false` | `false` | Callback on valid right swipe or confirmed hint click (`(event, li) => {}`). |
 | `swipe.right.condition` | `function` | `(item) => true` | Condition to allow right swipe (`(idx, item, li) => boolean`). |
 | `onSelected` | `function` | `(e) => {}` | Runs after an item is selected. |
 | `onInput` | `function` | `(event, input) => {}` | Runs while typing/filtering. |
@@ -202,6 +208,46 @@ const taskDd = new Dropdown('taskDropdown', {
   }
 });
 ```
+
+#### Reveal the hint and confirm with a click or tap
+
+Set `swipe.trigger: 'click'` to keep the row shifted after a horizontal mouse or touch swipe. The action runs only when its revealed hint is clicked or tapped. This mode uses the native menu (`listjs: false`). Without this option, the existing immediate action on release remains the default.
+
+```js
+const storageDd = new Dropdown('storageDropdown', {
+  autoselectsingle: false,
+  items: {
+    1: { description: 'Main warehouse', dataList: { 'data-stock': 0 } }
+  },
+  swipe: {
+    trigger: 'click',
+    left: {
+      hint: '<i class="bi bi-trash3"></i>',
+      label: 'Delete storage',
+      condition: (idx, item) => Number(item.dataList['data-stock']) === 0,
+      action: (event, li) => {
+        console.log('Confirmed deletion:', li.querySelector('[data-value]').dataset.value);
+        return false; // Keep the row; let the application handle removal after saving.
+      }
+    },
+    right: {
+      hint: '<i class="bi bi-pencil"></i>',
+      label: 'Rename storage',
+      action: (event, li) => {
+        console.log('Open rename form:', li.querySelector('[data-value]').dataset.value);
+        return false;
+      }
+    }
+  }
+});
+```
+
+- `left` means swiping left to reveal the action on the right; `right` reveals it on the left.
+- Only one row per dropdown stays open. Swiping back, clicking the shifted row or outside it, pressing Escape, filtering, or closing the menu resets it without running the action.
+- Vertical touch scrolling remains available. Disabled entries and disabled dropdowns cannot trigger an action. Conditions are checked when the hints are built, while revealing them, and again before execution.
+- On a focused row, Left/Right Arrow reveals and focuses the corresponding action button. Enter/Space confirms it. Use `label` to name icon-only actions for screen readers.
+- Returning `false` from `action` keeps the row; any other return value removes it. For asynchronous operations, return `false` immediately and update the list after the request succeeds. Server-side permissions and deletion constraints remain the application's responsibility.
+- `clear()`, `setItems()` and `dispose()` clean up the click-swipe listeners; `setDisabled(true)` closes any revealed action.
 
 ### 7. Dispose cleanly (for example before DOM removal)
 
